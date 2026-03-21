@@ -1,5 +1,5 @@
 /**
- * Bubble Weather Card v2.0.0 - Fixed Night Mode
+ * Nimbus Weather Card v1.1.0
  * Apple Weather-inspired card for Home Assistant
  */
 
