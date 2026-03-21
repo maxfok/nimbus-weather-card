@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.0.0 - Fixed Night Mode
+ * Bubble Weather Card v2.0.0 - Fixed Night Mode
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -1017,3 +1017,233 @@ class NimbusWeatherCard extends HTMLElement {
 }
 
 customElements.define('nimbus-weather-card', NimbusWeatherCard);
+
+// ── CONFIG EDITOR ──────────────────────────────────────────────────────────────
+class NimbusWeatherCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._config = {};
+  }
+
+  setConfig(config) {
+    this._config = { ...config };
+    this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._rendered) this._render();
+  }
+
+  _fire(config) {
+    this.dispatchEvent(new CustomEvent('config-changed', { detail: { config }, bubbles: true, composed: true }));
+  }
+
+  _val(key, def) {
+    return this._config[key] !== undefined ? this._config[key] : def;
+  }
+
+  _weatherEntities() {
+    if (!this._hass) return [];
+    return Object.keys(this._hass.states).filter(e => e.startsWith('weather.')).sort();
+  }
+
+  _sensorEntities() {
+    if (!this._hass) return [];
+    return Object.keys(this._hass.states).filter(e => e.startsWith('sensor.')).sort();
+  }
+
+  _sunEntities() {
+    if (!this._hass) return [];
+    return Object.keys(this._hass.states).filter(e => e.startsWith('sun.')).sort();
+  }
+
+  _render() {
+    this._rendered = true;
+    const c = this._config;
+    const weatherEntities = this._weatherEntities();
+    const sensorEntities = this._sensorEntities();
+    const sunEntities = this._sunEntities();
+
+    this.shadowRoot.innerHTML = `
+<style>
+  :host { display:block; font-family:var(--primary-font-family,system-ui); }
+  .section { margin-bottom:16px; }
+  .section-title { font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--secondary-text-color); margin-bottom:8px; }
+  .row { display:flex; align-items:center; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--divider-color,#eee); }
+  .row:last-child { border-bottom:none; }
+  .label { font-size:14px; color:var(--primary-text-color); }
+  .sublabel { font-size:12px; color:var(--secondary-text-color); margin-top:2px; }
+  select, input[type="text"] {
+    background:var(--card-background-color,#fff);
+    color:var(--primary-text-color);
+    border:1px solid var(--divider-color,#ccc);
+    border-radius:4px;
+    padding:6px 8px;
+    font-size:13px;
+    min-width:180px;
+  }
+  .toggle { position:relative; width:40px; height:22px; flex-shrink:0; }
+  .toggle input { opacity:0; width:0; height:0; }
+  .slider-track {
+    position:absolute; inset:0; background:var(--disabled-color,#ccc);
+    border-radius:11px; cursor:pointer; transition:background .2s;
+  }
+  .toggle input:checked + .slider-track { background:var(--primary-color,#03a9f4); }
+  .slider-thumb {
+    position:absolute; width:18px; height:18px; left:2px; top:2px;
+    background:#fff; border-radius:50%; transition:transform .2s; pointer-events:none;
+  }
+  .toggle input:checked ~ .slider-thumb { transform:translateX(18px); }
+  .speed-row { display:flex; align-items:center; gap:12px; }
+  .speed-row input[type=range] { flex:1; accent-color:var(--primary-color,#03a9f4); }
+  .speed-val { font-size:13px; min-width:24px; text-align:right; color:var(--secondary-text-color); }
+</style>
+
+<!-- REQUIRED -->
+<div class="section">
+  <div class="section-title">Required</div>
+  <div class="row">
+    <div><div class="label">Weather Entity</div></div>
+    <select id="entity">
+      ${weatherEntities.map(e => `<option value="${e}" ${c.entity===e?'selected':''}>${e}</option>`).join('')}
+    </select>
+  </div>
+</div>
+
+<!-- DISPLAY -->
+<div class="section">
+  <div class="section-title">Display</div>
+  <div class="row">
+    <div><div class="label">Name</div><div class="sublabel">Leave empty for entity friendly name</div></div>
+    <input type="text" id="name" value="${c.name||''}" placeholder="e.g. Athens">
+  </div>
+  <div class="row">
+    <div><div class="label">Temperature Unit</div></div>
+    <select id="temperature_unit">
+      <option value="C" ${this._val('temperature_unit','C')==='C'?'selected':''}>°C</option>
+      <option value="F" ${this._val('temperature_unit','C')==='F'?'selected':''}>°F</option>
+    </select>
+  </div>
+  <div class="row">
+    <div><div class="label">24h Time Format</div><div class="sublabel">Used in hourly forecast</div></div>
+    ${this._toggle('use_24h', this._val('use_24h', true))}
+  </div>
+</div>
+
+<!-- FORECAST -->
+<div class="section">
+  <div class="section-title">Forecast</div>
+  <div class="row">
+    <div><div class="label">Forecast Type</div></div>
+    <select id="forecast_type">
+      <option value="daily" ${this._val('forecast_type','daily')==='daily'?'selected':''}>Daily</option>
+      <option value="hourly" ${this._val('forecast_type','daily')==='hourly'?'selected':''}>Hourly</option>
+    </select>
+  </div>
+  <div class="row">
+    <div><div class="label">Max Items</div></div>
+    <select id="max_items">
+      ${[1,2,3,4,5,6,7].map(n=>`<option value="${n}" ${this._val('max_items',5)==n?'selected':''}>${n}</option>`).join('')}
+    </select>
+  </div>
+  <div class="row">
+    <div><div class="label">Show Forecast Strip</div></div>
+    ${this._toggle('show_forecast', this._val('show_forecast', true))}
+  </div>
+  <div class="row">
+    <div><div class="label">Show Details</div><div class="sublabel">Humidity, wind, pressure</div></div>
+    ${this._toggle('show_details', this._val('show_details', true))}
+  </div>
+  <div class="row">
+    <div><div class="label">Show Feels Like</div></div>
+    ${this._toggle('show_feels_like', this._val('show_feels_like', true))}
+  </div>
+</div>
+
+<!-- ENTITIES -->
+<div class="section">
+  <div class="section-title">Optional Entities</div>
+  <div class="row">
+    <div><div class="label">Moon Entity</div><div class="sublabel">For realistic moon phases</div></div>
+    <select id="moon_entity">
+      <option value="">— None —</option>
+      ${sensorEntities.map(e=>`<option value="${e}" ${c.moon_entity===e?'selected':''}>${e}</option>`).join('')}
+    </select>
+  </div>
+  <div class="row">
+    <div><div class="label">Sun Entity</div><div class="sublabel">For accurate day/night</div></div>
+    <select id="sun_entity">
+      <option value="">— None —</option>
+      ${sunEntities.map(e=>`<option value="${e}" ${c.sun_entity===e?'selected':''}>${e}</option>`).join('')}
+    </select>
+  </div>
+</div>
+
+<!-- PERFORMANCE -->
+<div class="section">
+  <div class="section-title">Performance</div>
+  <div class="row">
+    <div><div class="label">Animation Speed</div><div class="sublabel">0 = off, 1 = normal, 2 = fast</div></div>
+    <div class="speed-row">
+      <input type="range" id="animation_speed" min="0" max="2" step="0.5" value="${this._val('animation_speed',1)}">
+      <span class="speed-val" id="speed-val">${this._val('animation_speed',1)}</span>
+    </div>
+  </div>
+</div>`;
+
+    this._attach();
+  }
+
+  _toggle(id, checked) {
+    return `<label class="toggle">
+      <input type="checkbox" id="${id}" ${checked?'checked':''}>
+      <div class="slider-track"></div>
+      <div class="slider-thumb"></div>
+    </label>`;
+  }
+
+  _attach() {
+    const sr = this.shadowRoot;
+    const upd = () => {
+      const cfg = {
+        entity: sr.getElementById('entity')?.value || this._config.entity,
+        forecast_type: sr.getElementById('forecast_type')?.value || 'daily',
+        max_items: parseInt(sr.getElementById('max_items')?.value) || 5,
+        show_forecast: sr.getElementById('show_forecast')?.checked ?? true,
+        show_details: sr.getElementById('show_details')?.checked ?? true,
+        show_feels_like: sr.getElementById('show_feels_like')?.checked ?? true,
+        temperature_unit: sr.getElementById('temperature_unit')?.value || 'C',
+        use_24h: sr.getElementById('use_24h')?.checked ?? true,
+        animation_speed: parseFloat(sr.getElementById('animation_speed')?.value ?? 1),
+      };
+      const name = sr.getElementById('name')?.value?.trim();
+      if (name) cfg.name = name;
+      const moon = sr.getElementById('moon_entity')?.value;
+      if (moon) cfg.moon_entity = moon;
+      const sun = sr.getElementById('sun_entity')?.value;
+      if (sun) cfg.sun_entity = sun;
+      this._config = cfg;
+      this._fire(cfg);
+    };
+
+    sr.querySelectorAll('select, input[type="text"], input[type="checkbox"]').forEach(el => {
+      el.addEventListener('change', upd);
+    });
+    const spd = sr.getElementById('animation_speed');
+    const spdVal = sr.getElementById('speed-val');
+    if (spd && spdVal) {
+      spd.addEventListener('input', () => { spdVal.textContent = spd.value; upd(); });
+    }
+  }
+}
+
+customElements.define('nimbus-weather-card-editor', NimbusWeatherCardEditor);
+
+// Inject getStubConfig and getConfigElement into NimbusWeatherCard
+Object.assign(NimbusWeatherCard, {
+  getStubConfig: () => ({ entity: 'weather.home' }),
+});
+NimbusWeatherCard.getConfigElement = () => document.createElement('nimbus-weather-card-editor');
+NimbusWeatherCard.getStubConfig = () => ({ entity: 'weather.home' });
