@@ -1021,6 +1021,14 @@ class NimbusWeatherCard extends HTMLElement {
 
 customElements.define('nimbus-weather-card', NimbusWeatherCard);
 
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: 'nimbus-weather-card',
+  name: 'Nimbus Weather Card',
+  description: 'Apple Weather-inspired card with smooth particle effects, dynamic backgrounds, and moon phase support.',
+  preview: true,
+});
+
 // ── CONFIG EDITOR ──────────────────────────────────────────────────────────────
 class NimbusWeatherCardEditor extends HTMLElement {
   constructor() {
