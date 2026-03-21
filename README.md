@@ -23,10 +23,14 @@ A beautiful, Apple Weather‑inspired custom card for Home Assistant with smooth
 
 ### Via HACS (recommended)
 
-1. Open **HACS → Frontend → Explore & download repositories**
-2. Search for **Nimbus Weather Card**
-3. Click **Download**
-4. Refresh your browser cache (`Shift+Reload`)
+> ⏳ **Pending inclusion in HACS default store.** Until then, add as a custom repository:
+
+1. Open **HACS → Frontend**
+2. Click the **3 dots** (top right) → **Custom repositories**
+3. Add `https://github.com/maxfok/nimbus-weather-card` with category **Lovelace**
+4. Click **Add** → search for **Nimbus Weather Card** → **Download**
+5. Refresh your browser cache (`Shift+Reload`)
+6. Go to **Settings → Dashboards → Resources** and verify the resource is added
 
 ### Manual
 
