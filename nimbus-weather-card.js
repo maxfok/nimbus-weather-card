@@ -276,6 +276,9 @@ const BOLT_PATHS = [
 ];
 
 class NimbusWeatherCard extends HTMLElement {
+  static getStubConfig() { return { entity: 'weather.home' }; }
+  static getConfigElement() { return document.createElement('nimbus-weather-card-editor'); }
+
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
@@ -1240,10 +1243,3 @@ class NimbusWeatherCardEditor extends HTMLElement {
 }
 
 customElements.define('nimbus-weather-card-editor', NimbusWeatherCardEditor);
-
-// Inject getStubConfig and getConfigElement into NimbusWeatherCard
-Object.assign(NimbusWeatherCard, {
-  getStubConfig: () => ({ entity: 'weather.home' }),
-});
-NimbusWeatherCard.getConfigElement = () => document.createElement('nimbus-weather-card-editor');
-NimbusWeatherCard.getStubConfig = () => ({ entity: 'weather.home' });
