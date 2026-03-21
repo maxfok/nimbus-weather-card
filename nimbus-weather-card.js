@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.1.3
+ * Nimbus Weather Card v1.1.4
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -1222,6 +1222,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
       const entity = sr.getElementById('entity')?.value || this._config.entity;
       if (!entity) return; // Don't fire if no entity
       const cfg = {
+        type: 'custom:nimbus-weather-card',
         entity,
         forecast_type: sr.getElementById('forecast_type')?.value || 'daily',
         max_items: parseInt(sr.getElementById('max_items')?.value) || 5,
