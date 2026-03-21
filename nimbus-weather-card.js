@@ -1218,8 +1218,10 @@ class NimbusWeatherCardEditor extends HTMLElement {
   _attach() {
     const sr = this.shadowRoot;
     const upd = () => {
+      const entity = sr.getElementById('entity')?.value || this._config.entity;
+      if (!entity) return; // Don't fire if no entity
       const cfg = {
-        entity: sr.getElementById('entity')?.value || this._config.entity,
+        entity,
         forecast_type: sr.getElementById('forecast_type')?.value || 'daily',
         max_items: parseInt(sr.getElementById('max_items')?.value) || 5,
         show_forecast: sr.getElementById('show_forecast')?.checked ?? true,
