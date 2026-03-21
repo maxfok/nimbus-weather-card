@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.1.0
+ * Nimbus Weather Card v1.1.3
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -1027,6 +1027,7 @@ window.customCards.push({
   name: 'Nimbus Weather Card',
   description: 'Apple Weather-inspired card with smooth particle effects, dynamic backgrounds, and moon phase support.',
   preview: true,
+  documentationURL: 'https://github.com/maxfok/nimbus-weather-card',
 });
 
 // ── CONFIG EDITOR ──────────────────────────────────────────────────────────────
