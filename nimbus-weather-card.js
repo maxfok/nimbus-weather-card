@@ -1300,7 +1300,9 @@ class NimbusWeatherCardEditor extends HTMLElement {
       const entity = sr.getElementById('entity')?.value || this._config.entity;
       if (!entity) return;
       const showForecast = sr.getElementById('show_forecast')?.checked ?? true;
+      // Start from existing config to preserve unknown fields like grid_options
       const cfg = {
+        ...this._config,
         type: 'custom:nimbus-weather-card',
         entity,
         forecast_type: sr.getElementById('forecast_type')?.value || 'daily',
@@ -1314,11 +1316,11 @@ class NimbusWeatherCardEditor extends HTMLElement {
         local_sensors: getSensors(),
       };
       const name = sr.getElementById('name')?.value?.trim();
-      if (name) cfg.name = name;
+      cfg.name = name || undefined;
       const moon = sr.getElementById('moon_entity')?.value;
-      if (moon) cfg.moon_entity = moon;
+      cfg.moon_entity = moon || undefined;
       const sun = sr.getElementById('sun_entity')?.value;
-      if (sun) cfg.sun_entity = sun;
+      cfg.sun_entity = sun || undefined;
       this._config = cfg;
       this._fire(cfg);
     };
