@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.3.1
+ * Nimbus Weather Card v1.3.2
  * Apple Weather-inspired card for Home Assistant
  */
 
