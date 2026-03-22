@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.2.1
+ * Nimbus Weather Card v1.3.0
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -333,6 +333,7 @@ class NimbusWeatherCard extends HTMLElement {
       use_24h: config.use_24h !== false,
       show_feels_like: config.show_feels_like !== false,
       animation_speed: config.animation_speed || 1,
+      local_sensors: config.local_sensors || [],
     };
   }
 
@@ -953,6 +954,13 @@ class NimbusWeatherCard extends HTMLElement {
 .fic { width:30px; height:30px; opacity:.85; color:white }
 .fh  { font-size:14px; font-weight:600; margin-top:4px; color:white }
 .fl  { font-size:12px; font-weight:400; opacity:.5; margin-top:2px }
+.sf  { background:rgba(0,20,60,0.22); backdrop-filter:blur(25px) saturate(200%) brightness(0.9); -webkit-backdrop-filter:blur(25px) saturate(200%) brightness(0.9); border-radius:16px; border:1px solid rgba(255,255,255,0.18); box-shadow:0 2px 8px rgba(0,0,0,0.10); margin:0 auto; width:calc(100% - 0px) }
+.sr  { display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:1px solid rgba(255,255,255,0.1) }
+.sr:last-child { border-bottom:none }
+.sr ha-icon { --mdc-icon-size:20px; opacity:.9; color:white; flex-shrink:0 }
+.sn  { flex:1; font-size:13px; opacity:.8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.sv  { font-size:15px; font-weight:600; color:white }
+.su  { font-size:11px; opacity:.65; margin-left:2px }
 </style>
 
 <div class="wrapper">
@@ -1034,6 +1042,21 @@ class NimbusWeatherCard extends HTMLElement {
               <div class="fh">${this._t(f.temperature)}°</div>
               ${f.templow !== undefined ? `<div class="fl">${this._t(f.templow)}°</div>` : ''}
             </div>`).join('')}
+        </div>` : ''}
+        ${!this._config.show_forecast && this._config.local_sensors?.length ? `
+        <div class="sf">
+          ${this._config.local_sensors.map(s => {
+            const ent = this._hass?.states[s.entity];
+            const val = ent ? ent.state : '--';
+            const unit = ent ? (ent.attributes.unit_of_measurement || '') : '';
+            const name = s.name || (ent ? ent.attributes.friendly_name : s.entity);
+            const icon = s.icon || 'mdi:gauge';
+            return `<div class="sr">
+              <ha-icon icon="${icon}"></ha-icon>
+              <span class="sn">${name}</span>
+              <span class="sv">${val}</span><span class="su">${unit}</span>
+            </div>`;
+          }).join('')}
         </div>` : ''}
       `;
     }
@@ -1200,10 +1223,10 @@ class NimbusWeatherCardEditor extends HTMLElement {
 <div class="section">
   <div class="section-title">Optional Entities</div>
   <div class="row">
-    <div><div class="label">Moon Entity</div><div class="sublabel">For realistic moon phases</div></div>
+    <div><div class="label">Moon Entity</div><div class="sublabel">Auto-calculated if not set</div></div>
     <select id="moon_entity">
-      <option value="">— None —</option>
-      ${sensorEntities.map(e=>`<option value="${e}" ${c.moon_entity===e?'selected':''}>${e}</option>`).join('')}
+      <option value="">— Auto —</option>
+      ${this._hass ? Object.keys(this._hass.states).filter(e => e.toLowerCase().includes('moon')).sort().map(e=>`<option value="${e}" ${c.moon_entity===e?'selected':''}>${e}</option>`).join('') : ''}
     </select>
   </div>
   <div class="row">
@@ -1213,6 +1236,26 @@ class NimbusWeatherCardEditor extends HTMLElement {
       ${sunEntities.map(e=>`<option value="${e}" ${c.sun_entity===e?'selected':''}>${e}</option>`).join('')}
     </select>
   </div>
+</div>
+
+<!-- LOCAL SENSORS -->
+<div class="section" id="sensors-section" style="opacity:${this._val('show_forecast',true)?'0.4':'1'}">
+  <div class="section-title">Local Sensors <span style="font-size:10px;font-weight:400;opacity:0.6">${this._val('show_forecast',true)?'(disable forecast to use)':''}</span></div>
+  ${(c.local_sensors||[]).map((s,i)=>`
+  <div class="row sensor-entry" data-idx="${i}" style="flex-direction:column;align-items:stretch;gap:6px;padding-bottom:12px">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div class="label">Sensor ${i+1}</div>
+      <button class="remove-sensor" data-idx="${i}" style="background:none;border:none;cursor:pointer;color:var(--color-text-secondary);font-size:16px;padding:0 4px" ${this._val('show_forecast',true)?'disabled':''}>✕</button>
+    </div>
+    <select class="sensor-entity" data-idx="${i}" ${this._val('show_forecast',true)?'disabled':''}>
+      <option value="">— Select entity —</option>
+      ${this._hass ? Object.keys(this._hass.states).filter(e=>!e.startsWith('weather.')&&!e.startsWith('sun.')).sort().map(e=>`<option value="${e}" ${s.entity===e?'selected':''}>${e}</option>`).join('') : ''}
+    </select>
+    <input type="text" class="sensor-icon" data-idx="${i}" value="${s.icon||''}" placeholder="mdi:thermometer" ${this._val('show_forecast',true)?'disabled':''}>
+    <input type="text" class="sensor-name" data-idx="${i}" value="${s.name||''}" placeholder="Label (optional)" ${this._val('show_forecast',true)?'disabled':''}>
+  </div>`).join('')}
+  ${(c.local_sensors||[]).length < 4 ? `
+  <button id="add-sensor" style="width:100%;padding:8px;border-radius:8px;border:1px dashed var(--color-border-secondary);background:none;cursor:pointer;color:var(--color-text-secondary);font-size:14px" ${this._val('show_forecast',true)?'disabled':''}>+ Add sensor</button>` : ''}
 </div>
 
 <!-- PERFORMANCE -->
@@ -1240,20 +1283,35 @@ class NimbusWeatherCardEditor extends HTMLElement {
 
   _attach() {
     const sr = this.shadowRoot;
+
+    const getSensors = () => {
+      const sensors = [];
+      sr.querySelectorAll('.sensor-entry').forEach(row => {
+        const idx = row.dataset.idx;
+        const entity = sr.querySelector(`.sensor-entity[data-idx="${idx}"]`)?.value;
+        const icon = sr.querySelector(`.sensor-icon[data-idx="${idx}"]`)?.value?.trim();
+        const name = sr.querySelector(`.sensor-name[data-idx="${idx}"]`)?.value?.trim();
+        if (entity) sensors.push({ entity, ...(icon ? {icon} : {}), ...(name ? {name} : {}) });
+      });
+      return sensors;
+    };
+
     const upd = () => {
       const entity = sr.getElementById('entity')?.value || this._config.entity;
-      if (!entity) return; // Don't fire if no entity
+      if (!entity) return;
+      const showForecast = sr.getElementById('show_forecast')?.checked ?? true;
       const cfg = {
         type: 'custom:nimbus-weather-card',
         entity,
         forecast_type: sr.getElementById('forecast_type')?.value || 'daily',
         max_items: parseInt(sr.getElementById('max_items')?.value) || 5,
-        show_forecast: sr.getElementById('show_forecast')?.checked ?? true,
+        show_forecast: showForecast,
         show_details: sr.getElementById('show_details')?.checked ?? true,
         show_feels_like: sr.getElementById('show_feels_like')?.checked ?? true,
         temperature_unit: sr.getElementById('temperature_unit')?.value || 'C',
         use_24h: sr.getElementById('use_24h')?.checked ?? true,
         animation_speed: parseFloat(sr.getElementById('animation_speed')?.value ?? 1),
+        local_sensors: getSensors(),
       };
       const name = sr.getElementById('name')?.value?.trim();
       if (name) cfg.name = name;
@@ -1268,11 +1326,31 @@ class NimbusWeatherCardEditor extends HTMLElement {
     sr.querySelectorAll('select, input[type="text"], input[type="checkbox"]').forEach(el => {
       el.addEventListener('change', upd);
     });
+
     const spd = sr.getElementById('animation_speed');
     const spdVal = sr.getElementById('speed-val');
     if (spd && spdVal) {
       spd.addEventListener('input', () => { spdVal.textContent = spd.value; upd(); });
     }
+
+    // Add sensor button
+    sr.getElementById('add-sensor')?.addEventListener('click', () => {
+      const sensors = getSensors();
+      if (sensors.length >= 4) return;
+      sensors.push({ entity: '', icon: 'mdi:gauge', name: '' });
+      this._config = { ...this._config, local_sensors: sensors };
+      this._render();
+    });
+
+    // Remove sensor buttons
+    sr.querySelectorAll('.remove-sensor').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.dataset.idx);
+        const sensors = getSensors().filter((_, i) => i !== idx);
+        this._config = { ...this._config, local_sensors: sensors };
+        this._render();
+      });
+    });
   }
 }
 
