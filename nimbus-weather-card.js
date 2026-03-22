@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.3.0
+ * Nimbus Weather Card v1.3.1
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -1239,6 +1239,9 @@ class NimbusWeatherCardEditor extends HTMLElement {
 </div>
 
 <!-- LOCAL SENSORS -->
+<datalist id="entities-list">
+  ${this._hass ? Object.keys(this._hass.states).filter(e=>!e.startsWith('weather.')&&!e.startsWith('sun.')).sort().map(e=>`<option value="${e}">`).join('') : ''}
+</datalist>
 <div class="section" id="sensors-section" style="opacity:${this._val('show_forecast',true)?'0.4':'1'}">
   <div class="section-title">Local Sensors <span style="font-size:10px;font-weight:400;opacity:0.6">${this._val('show_forecast',true)?'(disable forecast to use)':''}</span></div>
   ${(c.local_sensors||[]).map((s,i)=>`
@@ -1247,10 +1250,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
       <div class="label">Sensor ${i+1}</div>
       <button class="remove-sensor" data-idx="${i}" style="background:none;border:none;cursor:pointer;color:var(--color-text-secondary);font-size:16px;padding:0 4px" ${this._val('show_forecast',true)?'disabled':''}>✕</button>
     </div>
-    <select class="sensor-entity" data-idx="${i}" ${this._val('show_forecast',true)?'disabled':''}>
-      <option value="">— Select entity —</option>
-      ${this._hass ? Object.keys(this._hass.states).filter(e=>!e.startsWith('weather.')&&!e.startsWith('sun.')).sort().map(e=>`<option value="${e}" ${s.entity===e?'selected':''}>${e}</option>`).join('') : ''}
-    </select>
+    <input type="text" list="entities-list" class="sensor-entity" data-idx="${i}" value="${s.entity||''}" placeholder="Search entity..." ${this._val('show_forecast',true)?'disabled':''}>
     <input type="text" class="sensor-icon" data-idx="${i}" value="${s.icon||''}" placeholder="mdi:thermometer" ${this._val('show_forecast',true)?'disabled':''}>
     <input type="text" class="sensor-name" data-idx="${i}" value="${s.name||''}" placeholder="Label (optional)" ${this._val('show_forecast',true)?'disabled':''}>
   </div>`).join('')}
@@ -1340,6 +1340,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
       sensors.push({ entity: '', icon: 'mdi:gauge', name: '' });
       this._config = { ...this._config, local_sensors: sensors };
       this._render();
+      this._fire(this._config);
     });
 
     // Remove sensor buttons
@@ -1349,6 +1350,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
         const sensors = getSensors().filter((_, i) => i !== idx);
         this._config = { ...this._config, local_sensors: sensors };
         this._render();
+        this._fire(this._config);
       });
     });
   }
