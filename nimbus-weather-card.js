@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.3.2
+ * Nimbus Weather Card v1.4.0
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -334,6 +334,7 @@ class NimbusWeatherCard extends HTMLElement {
       show_feels_like: config.show_feels_like !== false,
       animation_speed: config.animation_speed || 1,
       local_sensors: config.local_sensors || [],
+      ufo_easter_egg: config.ufo_easter_egg !== false,
     };
   }
 
@@ -1061,6 +1062,155 @@ class NimbusWeatherCard extends HTMLElement {
       `;
     }
     this._injectParticles(cond, isNight, moonPhase);
+    // UFO easter egg — only for clear-night
+    if (this._config.ufo_easter_egg && cond === 'clear-night' && isNight) {
+      this._initUfo();
+    } else {
+      this._destroyUfo();
+    }
+  }
+
+  _initUfo() {
+    if (this._ufoActive) return;
+    this._ufoActive = true;
+    const shadow = this.shadowRoot;
+
+    // Add UFO elements if not present
+    if (!shadow.getElementById('ufo-el')) {
+      const ufoEl = document.createElement('div');
+      ufoEl.id = 'ufo-el';
+      ufoEl.textContent = '🛸';
+      ufoEl.style.cssText = 'position:absolute;z-index:10;pointer-events:none;opacity:0;font-size:24px;filter:drop-shadow(0 0 8px rgba(120,220,255,0.9));';
+      shadow.getElementById('card')?.appendChild(ufoEl);
+
+      const cowEl = document.createElement('div');
+      cowEl.id = 'cow-el';
+      cowEl.textContent = '🐄';
+      cowEl.style.cssText = 'position:absolute;z-index:8;pointer-events:none;opacity:0;font-size:20px;transform-origin:center bottom;transform:scale(0);';
+      shadow.getElementById('card')?.appendChild(cowEl);
+
+      const beamEl = document.createElement('canvas');
+      beamEl.id = 'beam-el';
+      beamEl.width = 50; beamEl.height = 100;
+      beamEl.style.cssText = 'position:absolute;z-index:7;pointer-events:none;opacity:0;';
+      shadow.getElementById('card')?.appendChild(beamEl);
+    }
+    this._scheduleUfo();
+  }
+
+  _destroyUfo() {
+    if (!this._ufoActive) return;
+    this._ufoActive = false;
+    if (this._ufoTimer) { clearTimeout(this._ufoTimer); this._ufoTimer = null; }
+    const shadow = this.shadowRoot;
+    ['ufo-el','cow-el','beam-el'].forEach(id => shadow.getElementById(id)?.remove());
+  }
+
+  _scheduleUfo() {
+    if (!this._ufoActive) return;
+    const delay = 7200000 + Math.random() * 3600000; // 2-3 hours
+    this._ufoTimer = setTimeout(() => this._runUfo(), delay);
+  }
+
+  _runUfo() {
+    if (!this._ufoActive) return;
+    const shadow = this.shadowRoot;
+    const ufo  = shadow.getElementById('ufo-el');
+    const cow  = shadow.getElementById('cow-el');
+    const beam = shadow.getElementById('beam-el');
+    if (!ufo || !cow || !beam) return;
+    const bctx = beam.getContext('2d');
+
+    const DET_TOP=260, COW_FS=20, COW_X=90;
+    const COW_TOP = DET_TOP - COW_FS - 3;
+    const UFO_FS=24, UFO_X=COW_X, UFO_Y_HOVER=COW_TOP-UFO_FS-28;
+
+    const lerp=(a,b,t)=>a+(b-a)*t;
+    const easeInOut=t=>t<0.5?2*t*t:-1+(4-2*t)*t;
+    const easeIn=t=>t*t*t;
+    const easeOut=t=>1-Math.pow(1-t,3);
+
+    const anim=(dur,onFrame,onDone)=>{
+      const start=Date.now();
+      const frame=()=>{
+        if(!this._ufoActive)return;
+        const t=Math.min((Date.now()-start)/dur,1);
+        onFrame(t);
+        if(t<1)requestAnimationFrame(frame);else onDone&&onDone();
+      };
+      requestAnimationFrame(frame);
+    };
+
+    const drawBeam=(ufoTopPx,alpha)=>{
+      bctx.clearRect(0,0,50,400);
+      if(alpha<=0){beam.style.opacity='0';return;}
+      const ufoBottom=ufoTopPx+UFO_FS*0.85;
+      const beamH=Math.max(10,COW_TOP-ufoBottom+2);
+      beam.height=beamH; beam.style.height=beamH+'px';
+      beam.style.left=(UFO_X+UFO_FS*0.5-25)+'px';
+      beam.style.top=ufoBottom+'px'; beam.style.opacity='1';
+      const grad=bctx.createLinearGradient(0,0,0,beamH);
+      grad.addColorStop(0,`rgba(120,220,255,${alpha*0.65})`);
+      grad.addColorStop(1,`rgba(120,220,255,0)`);
+      bctx.beginPath();
+      bctx.moveTo(25-4,0);bctx.lineTo(25+4,0);
+      bctx.lineTo(25+13,beamH);bctx.lineTo(25-13,beamH);
+      bctx.closePath();bctx.fillStyle=grad;bctx.fill();
+    };
+
+    // Phase 1: Cow materializes
+    cow.style.left=COW_X+'px'; cow.style.top=COW_TOP+'px';
+    cow.style.fontSize=COW_FS+'px'; cow.style.opacity='1';
+    cow.style.transform='scale(0)';
+    anim(700,t=>{ cow.style.transform=`scale(${easeOut(t)})`; },()=>{
+      cow.style.transform='scale(1)';
+      // Phase 2: UFO flies in
+      ufo.style.opacity='1'; ufo.style.fontSize=UFO_FS+'px';
+      ufo.style.left='-30px'; ufo.style.top='180px';
+      anim(1800,t=>{
+        const e=easeInOut(t);
+        ufo.style.left=lerp(-30,UFO_X,e)+'px';
+        ufo.style.top=lerp(180,UFO_Y_HOVER,e)+'px';
+      },()=>{
+        // Phase 3: Bob + beam
+        const yStart=UFO_Y_HOVER,yEnd=UFO_Y_HOVER+6;
+        anim(1600,t=>{
+          const bob=Math.sin(t*Math.PI*5)*1.8;
+          const ufoNowY=lerp(yStart,yEnd,easeInOut(t))+bob;
+          ufo.style.top=ufoNowY+'px'; ufo.style.left=UFO_X+'px';
+          drawBeam(ufoNowY,t*0.85);
+        },()=>{
+          // Phase 4: Cow abducted
+          const ufoFinalY=parseFloat(ufo.style.top);
+          anim(750,t=>{
+            const e=easeIn(t);
+            cow.style.top=lerp(COW_TOP,ufoFinalY+UFO_FS*0.3,e)+'px';
+            cow.style.transform=`scale(${1-e})`;
+            cow.style.opacity=(1-e*0.9).toString();
+            drawBeam(ufoFinalY,0.85*(1-t));
+          },()=>{
+            cow.style.opacity='0'; cow.style.top=COW_TOP+'px'; cow.style.transform='scale(0)';
+            beam.style.opacity='0'; bctx.clearRect(0,0,50,400);
+            // Phase 5: satisfied
+            anim(400,t=>{ ufo.style.transform=`scale(${1+Math.sin(t*Math.PI*2)*0.1})`; },()=>{
+              ufo.style.transform='scale(1)';
+              // Phase 6: LAUNCH
+              const fromX=parseFloat(ufo.style.left),fromY=parseFloat(ufo.style.top);
+              anim(550,t=>{
+                const e=easeIn(t);
+                ufo.style.left=lerp(fromX,340,e)+'px';
+                ufo.style.top=lerp(fromY,-20,e)+'px';
+                ufo.style.fontSize=lerp(UFO_FS,5,e)+'px';
+                ufo.style.opacity=t>0.65?(1-(t-0.65)/0.35).toString():'1';
+              },()=>{
+                ufo.style.opacity='0'; ufo.style.fontSize=UFO_FS+'px';
+                this._scheduleUfo();
+              });
+            });
+          });
+        });
+      });
+    });
   }
 }
 
@@ -1268,6 +1418,10 @@ class NimbusWeatherCardEditor extends HTMLElement {
       <span class="speed-val" id="speed-val">${this._val('animation_speed',1)}</span>
     </div>
   </div>
+  <div class="row">
+    <div><div class="label">🛸 UFO Easter egg</div><div class="sublabel">Clear night only 👽</div></div>
+    ${this._toggle('ufo_easter_egg', this._val('ufo_easter_egg', true))}
+  </div>
 </div>`;
 
     this._attach();
@@ -1313,6 +1467,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
         temperature_unit: sr.getElementById('temperature_unit')?.value || 'C',
         use_24h: sr.getElementById('use_24h')?.checked ?? true,
         animation_speed: parseFloat(sr.getElementById('animation_speed')?.value ?? 1),
+        ufo_easter_egg: sr.getElementById('ufo_easter_egg')?.checked ?? true,
         local_sensors: getSensors(),
       };
       const name = sr.getElementById('name')?.value?.trim();
