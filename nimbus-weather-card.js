@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.2.0
+ * Nimbus Weather Card v1.2.1
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -276,7 +276,10 @@ const BOLT_PATHS = [
 ];
 
 class NimbusWeatherCard extends HTMLElement {
-  static getStubConfig() { return { entity: 'weather.home' }; }
+  static getStubConfig(hass) {
+    const entity = hass ? Object.keys(hass.states).find(e => e.startsWith('weather.')) || 'weather.home' : 'weather.home';
+    return { entity };
+  }
   static getConfigElement() { return document.createElement('nimbus-weather-card-editor'); }
 
   constructor() {
@@ -331,10 +334,6 @@ class NimbusWeatherCard extends HTMLElement {
       show_feels_like: config.show_feels_like !== false,
       animation_speed: config.animation_speed || 1,
     };
-    if (!config.moon_entity)
-      console.warn('[nimbus-weather-card] moon_entity not set — moon phase will not display. Add moon_entity: sensor.moon_phase to your config.');
-    if (!config.sun_entity)
-      console.warn('[nimbus-weather-card] sun_entity not set — day/night detection will use clock fallback. Add sun_entity: sun.sun for accuracy.');
   }
 
   // Επιστρέφει ταχύτητα ανέμου και μονάδα από το HA state
