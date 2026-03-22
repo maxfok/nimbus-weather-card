@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.1.4
+ * Nimbus Weather Card v1.2.0
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -376,7 +376,22 @@ class NimbusWeatherCard extends HTMLElement {
     if (this._config.moon_entity && this._hass.states[this._config.moon_entity]) {
       return this._hass.states[this._config.moon_entity].state;
     }
-    return null;
+    // Calculate moon phase from date when no sensor
+    const date = new Date();
+    const year = date.getFullYear(), month = date.getMonth() + 1, day = date.getDate();
+    const c = Math.floor((year - 1900) * 365.25);
+    const e = Math.floor(30.6 * (month > 2 ? month - 2 : month + 10));
+    const jd = c + e + day - 694039.09;
+    const phase = ((jd / 29.5305882) % 1 + 1) % 1;
+    if (phase < 0.033) return 'new_moon';
+    if (phase < 0.216) return 'waxing_crescent';
+    if (phase < 0.283) return 'first_quarter';
+    if (phase < 0.466) return 'waxing_gibbous';
+    if (phase < 0.533) return 'full_moon';
+    if (phase < 0.716) return 'waning_gibbous';
+    if (phase < 0.783) return 'last_quarter';
+    if (phase < 0.966) return 'waning_crescent';
+    return 'new_moon';
   }
 
   _sunElevation() {
@@ -968,6 +983,14 @@ class NimbusWeatherCard extends HTMLElement {
   _day(str) {
     if (!str) return '--';
     const d = new Date(str);
+    if (this._config.forecast_type === 'hourly') {
+      if (this._config.use_24h !== false) {
+        return d.getHours().toString().padStart(2, '0') + ':00';
+      } else {
+        const h = d.getHours();
+        return (h % 12 || 12) + (h < 12 ? 'am' : 'pm');
+      }
+    }
     return d.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase();
   }
 
