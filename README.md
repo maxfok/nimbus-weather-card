@@ -2,7 +2,7 @@
 
 A beautiful, Apple Weather‑inspired custom card for Home Assistant with smooth particle effects, dynamic backgrounds, moon phase support, and local sensor display.
 
-<img width="1440" height="1926" alt="image" src="https://github.com/user-attachments/assets/4cdf2098-9d3a-4ada-0193-2b90c4cfc2dc" />
+<img width="1440" height="1926" alt="image" src="https://github.com/maxfok/nimbus-weather-card/blob/main/nimbus-weather-card-preview.png"/>
 
 ---
 
