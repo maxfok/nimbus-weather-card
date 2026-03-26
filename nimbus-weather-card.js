@@ -556,12 +556,18 @@ class NimbusWeatherCard extends HTMLElement {
         const track = document.createElement('div');
         track.className = 'flare-track';
         track.style.opacity = sunOpacity;
-        ['f1','f2','f3','f4','f5'].forEach(cls => {
+        ['f1'].forEach(cls => {
           const el = document.createElement('div');
           el.className = 'flare ' + cls;
           track.appendChild(el);
         });
         box.appendChild(track);
+      }
+      // Atmospheric bottom-left glow μόνο για sunny
+      if (condition === 'sunny') {
+        const atmGlow = document.createElement('div');
+        atmGlow.className = 'sun-atm-glow';
+        box.appendChild(atmGlow);
       }
       box.appendChild(group);
     }
@@ -885,6 +891,20 @@ class NimbusWeatherCard extends HTMLElement {
 }
 @keyframes raysBreath { 0%,100%{opacity:0.7;transform:scale(6)} 50%{opacity:1;transform:scale(6.3)} }
 
+/* ── SUNNY BOTTOM-LEFT ATMOSPHERIC GLOW ── */
+.sun-atm-glow {
+  position:absolute; bottom:-60px; left:-60px; width:280px; height:280px; border-radius:50%;
+  background:radial-gradient(circle,
+    rgba(180,220,255,0.28) 0%,
+    rgba(150,200,255,0.14) 35%,
+    rgba(120,180,255,0.05) 60%,
+    transparent 75%);
+  filter:blur(18px);
+  animation:atmGlow 10s ease-in-out infinite;
+  pointer-events:none;
+}
+@keyframes atmGlow { 0%,100%{opacity:0.7;transform:scale(1)} 50%{opacity:1;transform:scale(1.08)} }
+
 /* ── PARTLY CLOUDY SUN GLOW ── */
 .pc-sun-glow {
   position:absolute; top:-50px; right:-30px; width:180px; height:180px; border-radius:50%;
@@ -962,6 +982,33 @@ class NimbusWeatherCard extends HTMLElement {
 .sn  { flex:1; font-size:13px; opacity:.8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
 .sv  { font-size:15px; font-weight:600; color:white }
 .su  { font-size:11px; opacity:.65; margin-left:2px }
+
+/* ── LENS FLARES ── */
+.flare-track {
+  position:absolute; inset:0; pointer-events:none; z-index:2;
+  animation:flareDrift 9s ease-in-out infinite;
+  transform-origin:80% 2%;
+}
+@keyframes flareDrift {
+  0%   { transform:translate3d(0px,0px,0) }
+  25%  { transform:translate3d(-8px,10px,0) }
+  50%  { transform:translate3d(-14px,18px,0) }
+  75%  { transform:translate3d(-7px,9px,0) }
+  100% { transform:translate3d(0px,0px,0) }
+}
+.f1 {
+  position:absolute; border-radius:50%; pointer-events:none;
+  width:50px; height:50px; top:26%; left:38%;
+  background:radial-gradient(circle, rgba(220,240,255,0.65) 0%, rgba(180,220,255,0.30) 30%, rgba(160,200,255,0.10) 55%, transparent 72%);
+  filter:blur(5px); animation:flarePulse 9s ease-in-out infinite;
+}
+.f2 {
+  position:absolute; border-radius:50%; pointer-events:none;
+  width:24px; height:24px; top:22%; left:54%;
+  background:radial-gradient(circle, transparent 0%, transparent 42%, rgba(255,255,255,0.50) 52%, rgba(255,255,255,0.15) 62%, transparent 72%);
+  filter:blur(2px); animation:flarePulse 9s ease-in-out infinite; animation-delay:0.8s;
+}
+@keyframes flarePulse { 0%,100%{opacity:0.55;transform:scale(1)} 50%{opacity:1.0;transform:scale(1.10)} }
 </style>
 
 <div class="wrapper">
@@ -1108,7 +1155,7 @@ class NimbusWeatherCard extends HTMLElement {
 
   _scheduleUfo() {
     if (!this._ufoActive) return;
-    const delay = 7200000 + Math.random() * 3600000; // 2-3 hours
+    const delay = 1800000 + Math.random() * 600000; // 30-40 minutes
     this._ufoTimer = setTimeout(() => this._runUfo(), delay);
   }
 
