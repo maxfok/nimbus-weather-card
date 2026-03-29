@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.4.2
+ * Nimbus Weather Card v1.5.0
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -474,7 +474,8 @@ class NimbusWeatherCard extends HTMLElement {
     const elevation = this._sunElevation();
     const humidity  = this._hass?.states[this._config.entity]?.attributes?.humidity ?? 0;
     const humBucket = (recentRain && elevation >= 12 && elevation < 42) ? 'rainbow' : 'dry';
-    const key = condition + '|' + isNight + '|' + (moonPhase || '') + '|' + Math.round(elevation / 5) + '|' + humBucket + '|' + recentRain;
+    const flareBucket = (condition === 'sunny' && elevation > 50) ? 'flares' : 'noflares';
+    const key = condition + '|' + isNight + '|' + (moonPhase || '') + '|' + Math.round(elevation / 5) + '|' + humBucket + '|' + recentRain + '|' + flareBucket;
     if (this._lastParticleKey === key) return;
     this._lastParticleKey = key;
     box.innerHTML = '';
@@ -588,8 +589,8 @@ class NimbusWeatherCard extends HTMLElement {
       group.appendChild(body);
       // Rays μόνο αν η ορατότητα είναι καλή
       if (sunOpacity > 0.4) group.appendChild(rays);
-      // Lens flares μόνο για sunny/partlycloudy
-      if (['sunny', 'partlycloudy', 'windy', 'windy-variant'].includes(condition)) {
+      // Lens flares μόνο για sunny + μεσημέρι (elevation > 50°)
+      if (condition === 'sunny' && clampedEl > 50) {
         const track = document.createElement('div');
         track.className = 'flare-track';
         track.style.opacity = sunOpacity;
@@ -1109,33 +1110,64 @@ class NimbusWeatherCard extends HTMLElement {
 /* ── LENS FLARES ── */
 .flare-track {
   position:absolute; inset:0; pointer-events:none; z-index:2;
-  animation:flareSwing 12s ease-in-out infinite;
-  transform-origin:85% 5%;
+  animation:flareSwing 14s ease-in-out infinite;
+  transform-origin:88% 3%;
 }
 @keyframes flareSwing {
   0%,100% { transform:translate3d(0px,0px,0) }
-  50%     { transform:translate3d(0px,8px,0) }
+  50%     { transform:translate3d(0px,10px,0) }
 }
-.flare { position:absolute; border-radius:50%; pointer-events:none; animation:flarePulse 5s ease-in-out infinite; }
-/* f1 — large diffuse spot, near sun */
-.f1 { width:38px; height:38px; top:12%; left:62%;
-  background:radial-gradient(circle, rgba(255,255,255,0.50) 0%, rgba(255,255,255,0.18) 40%, transparent 70%);
-  filter:blur(3px); animation-delay:0s; opacity:0.7; }
-/* f2 — hollow ring */
-.f2 { width:22px; height:22px; top:28%; left:48%;
-  background:transparent; border:2px solid rgba(255,255,255,0.55);
-  box-shadow:0 0 6px rgba(255,255,255,0.3); filter:blur(1.5px);
-  animation:flarePulseRing 5s ease-in-out infinite; animation-delay:0.6s; opacity:0.65; }
-/* f3 — small soft spot */
-.f3 { width:14px; height:14px; top:44%; left:34%;
-  background:radial-gradient(circle, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.18) 45%, transparent 70%);
-  filter:blur(2px); animation-delay:1.2s; opacity:0.45; }
-/* f4 — tiny bright dot */
-.f4 { width:7px; height:7px; top:60%; left:20%;
-  background:radial-gradient(circle, rgba(255,255,255,0.80) 0%, rgba(255,255,255,0.25) 55%, transparent 75%);
-  filter:blur(1px); animation-delay:1.8s; opacity:0.55; }
-@keyframes flarePulseRing { 0%,100%{opacity:0.35} 50%{opacity:0.75} }
-@keyframes flarePulse { 0%,100%{opacity:0.4;transform:scale(1)} 50%{opacity:0.9;transform:scale(1.15)} }
+.flare { position:absolute; border-radius:50%; pointer-events:none; }
+
+/* ── Lens disc flares — λεπτό περίγραμμα + blur εσωτερικά ── */
+/* f1 — tiny disc, near sun */
+.f1 {
+  width:12px; height:12px; top:20%; left:60%;
+  border-radius:50%;
+  border:1px solid rgba(135,206,255,0.70);
+  background:radial-gradient(circle, rgba(255,255,255,0.25) 0%, rgba(220,238,255,0.10) 60%, transparent 100%);
+  box-shadow:0 0 6px rgba(255,255,255,0.18), inset 0 0 4px rgba(255,255,255,0.15);
+  backdrop-filter:blur(2px); -webkit-backdrop-filter:blur(2px);
+  animation:flarePulse 8s ease-in-out infinite; animation-delay:0s;
+}
+
+/* f2 — small disc */
+.f2 {
+  width:30px; height:30px; top:27%; left:47%;
+  border-radius:50%;
+  border:1px solid rgba(135,206,255,0.55);
+  background:radial-gradient(circle, rgba(255,255,255,0.18) 0%, rgba(210,232,255,0.08) 55%, transparent 100%);
+  box-shadow:0 0 10px rgba(255,255,255,0.12), inset 0 0 8px rgba(255,255,255,0.10);
+  backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px);
+  animation:flarePulse 8s ease-in-out infinite; animation-delay:0.8s;
+}
+
+/* f3 — medium disc */
+.f3 {
+  width:54px; height:54px; top:33%; left:31%;
+  border-radius:50%;
+  border:1px solid rgba(135,206,255,0.40);
+  background:radial-gradient(circle, rgba(255,255,255,0.12) 0%, rgba(200,228,255,0.06) 50%, transparent 100%);
+  box-shadow:0 0 16px rgba(255,255,255,0.08), inset 0 0 14px rgba(255,255,255,0.08);
+  backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px);
+  animation:flarePulse 8s ease-in-out infinite; animation-delay:1.6s;
+}
+
+/* f4 — large disc, far from sun */
+.f4 {
+  width:90px; height:90px; top:53%; left:13%;
+  border-radius:50%;
+  border:1px solid rgba(135,206,255,0.28);
+  background:radial-gradient(circle, rgba(255,255,255,0.08) 0%, rgba(195,225,255,0.04) 50%, transparent 100%);
+  box-shadow:0 0 24px rgba(255,255,255,0.06), inset 0 0 22px rgba(255,255,255,0.06);
+  backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px);
+  animation:flarePulse 8s ease-in-out infinite; animation-delay:2.4s;
+}
+
+@keyframes flarePulse {
+  0%,100% { opacity:0.55; transform:scale(1) }
+  50%     { opacity:0.90; transform:scale(1.04) }
+}
 </style>
 
 <div class="wrapper">
