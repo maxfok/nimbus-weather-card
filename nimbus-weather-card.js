@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.4.0
+ * Nimbus Weather Card v1.4.2
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -368,6 +368,7 @@ class NimbusWeatherCard extends HTMLElement {
 
   disconnectedCallback() {
     if (this._lxInterval)   { clearInterval(this._lxInterval);   this._lxInterval   = null; }
+    if (this._splashInterval){ clearInterval(this._splashInterval); this._splashInterval = null; }
     if (this._timeInterval) { clearInterval(this._timeInterval);  this._timeInterval = null; }
     if (this._dripInterval) { clearInterval(this._dripInterval);  this._dripInterval = null; }
     if (this._forecastUnsub) { this._forecastUnsub(); this._forecastUnsub = null; }
@@ -427,17 +428,53 @@ class NimbusWeatherCard extends HTMLElement {
       if (condition === 'cloudy') return 'bg-cloudy-night';
       if (['windy', 'windy-variant'].includes(condition)) return 'bg-windy-night';
     }
-    
+
     // Ημερήσια backgrounds
     return BG_MAP[condition] || 'bg-default';
   }
 
-  _injectParticles(condition, isNight, moonPhase) {
+  _elevationBg(condition, isNight) {
+    if (isNight) return null;
+    if (!['sunny','partlycloudy','windy','windy-variant'].includes(condition)) return null;
+
+    const el = Math.max(-10, Math.min(90, this._sunElevation()));
+
+    if (el < -5)  return 'linear-gradient(180deg,#080c1a 0%,#0e1628 40%,#161f3a 100%)';
+    if (el < 0)   return 'linear-gradient(180deg,#0d1b3e 0%,#1a1a5e 20%,#4a2060 45%,#8b3a5a 65%,#c4603a 82%,#e8883a 100%)';
+    if (el < 5)   return 'linear-gradient(180deg,#0e2460 0%,#1e3a7a 18%,#5a3080 38%,#b05040 55%,#e07030 72%,#f0a040 88%,#fad070 100%)';
+    if (el < 12)  return 'linear-gradient(180deg,#1a3a78 0%,#2a5aa0 22%,#4a80c0 42%,#7aaad8 60%,#c08840 78%,#e8b860 92%,#f5d480 100%)';
+    if (el < 25)  return 'linear-gradient(180deg,#1a6abf 0%,#2e86d4 28%,#55a0e0 52%,#82bef0 72%,#b8d8f8 88%,#ddeeff 100%)';
+    if (el < 50)  return 'linear-gradient(180deg,#1278c8 0%,#2e90dc 22%,#55aae8 45%,#88c8f5 68%,#c2dff8 88%,#daeeff 100%)';
+    return              'linear-gradient(180deg,#1a88de 0%,#46a4e8 18%,#78c0f2 42%,#b2daf8 68%,#daeeff 100%)';
+  }
+
+  // Ελέγχει αν έβρεξε τις τελευταίες 2 ώρες βάσει ιστορικού
+  async _recentRain() {
+    if (!this._hass || !this._config) return false;
+    try {
+      const now = new Date();
+      const from = new Date(now - 2 * 60 * 60 * 1000).toISOString();
+      const history = await this._hass.callApi('GET',
+        `history/period/${from}?filter_entity_id=${this._config.entity}&minimal_response=true&no_attributes=true`);
+      if (!history || !history[0]) return false;
+      const rainConditions = ['rainy','pouring','lightning','lightning-rainy','snowy-rainy'];
+      return history[0].some(s => rainConditions.includes(s.state));
+    } catch(e) { return false; }
+  }
+
+  async _injectParticlesAsync(condition, isNight, moonPhase) {
+    const recentRain = await this._recentRain();
+    this._injectParticles(condition, isNight, moonPhase, recentRain);
+  }
+
+  _injectParticles(condition, isNight, moonPhase, recentRain = false) {
     const box = this.shadowRoot.getElementById('ptcl');
     if (!box) return;
 
     const elevation = this._sunElevation();
-    const key = condition + '|' + isNight + '|' + (moonPhase || '') + '|' + Math.round(elevation / 5);
+    const humidity  = this._hass?.states[this._config.entity]?.attributes?.humidity ?? 0;
+    const humBucket = (recentRain && elevation >= 12 && elevation < 42) ? 'rainbow' : 'dry';
+    const key = condition + '|' + isNight + '|' + (moonPhase || '') + '|' + Math.round(elevation / 5) + '|' + humBucket + '|' + recentRain;
     if (this._lastParticleKey === key) return;
     this._lastParticleKey = key;
     box.innerHTML = '';
@@ -556,7 +593,7 @@ class NimbusWeatherCard extends HTMLElement {
         const track = document.createElement('div');
         track.className = 'flare-track';
         track.style.opacity = sunOpacity;
-        ['f1'].forEach(cls => {
+        ['f1','f2','f3','f4'].forEach(cls => {
           const el = document.createElement('div');
           el.className = 'flare ' + cls;
           track.appendChild(el);
@@ -568,6 +605,49 @@ class NimbusWeatherCard extends HTMLElement {
         const atmGlow = document.createElement('div');
         atmGlow.className = 'sun-atm-glow';
         box.appendChild(atmGlow);
+      }
+
+      // ── RAINBOW — partlycloudy/sunny + πρόσφατη βροχή (2h) + elevation 12-42° ──
+      const humidity = this._hass?.states[this._config.entity]?.attributes?.humidity ?? 0;
+      const elev = this._sunElevation();
+      if (['partlycloudy','sunny'].includes(condition) && !isNight && recentRain && elev >= 12 && elev < 42) {
+        const rbSvg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+        rbSvg.setAttribute('class','rb-svg');
+        rbSvg.setAttribute('viewBox','0 0 360 280');
+        rbSvg.setAttribute('xmlns','http://www.w3.org/2000/svg');
+        rbSvg.innerHTML = `
+          <defs>
+            <filter id="rbBlur" x="-15%" y="-15%" width="130%" height="130%">
+              <feGaussianBlur stdDeviation="4"/>
+            </filter>
+            <radialGradient id="rbSunMask" cx="330" cy="10" r="100" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="black" stop-opacity="1"/>
+              <stop offset="40%"  stop-color="black" stop-opacity="0.9"/>
+              <stop offset="70%"  stop-color="black" stop-opacity="0.3"/>
+              <stop offset="100%" stop-color="black" stop-opacity="0"/>
+            </radialGradient>
+            <linearGradient id="rbEndFade" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%"   stop-color="white" stop-opacity="1"/>
+              <stop offset="60%"  stop-color="white" stop-opacity="1"/>
+              <stop offset="78%"  stop-color="white" stop-opacity="0.35"/>
+              <stop offset="90%"  stop-color="white" stop-opacity="0.06"/>
+              <stop offset="100%" stop-color="white" stop-opacity="0"/>
+            </linearGradient>
+            <mask id="rbMask">
+              <rect width="360" height="280" fill="url(#rbEndFade)"/>
+              <rect width="360" height="280" fill="url(#rbSunMask)" style="mix-blend-mode:multiply"/>
+            </mask>
+          </defs>
+          <g mask="url(#rbMask)" filter="url(#rbBlur)" opacity="0.35">
+            <path d="M -10,240 A 374,374 0 0,1 334,3"  fill="none" stroke="rgba(255,30,10,1)"  stroke-width="10"/>
+            <path d="M -10,249 A 366,366 0 0,1 333,8"  fill="none" stroke="rgba(255,140,0,1)"  stroke-width="10"/>
+            <path d="M -10,258 A 358,358 0 0,1 332,13" fill="none" stroke="rgba(255,228,0,1)"  stroke-width="10"/>
+            <path d="M -10,267 A 350,350 0 0,1 331,18" fill="none" stroke="rgba(30,190,40,1)"  stroke-width="9"/>
+            <path d="M -10,275 A 342,342 0 0,1 330,24" fill="none" stroke="rgba(20,85,255,1)"  stroke-width="9"/>
+            <path d="M -5,281  A 334,334 0 0,1 329,30" fill="none" stroke="rgba(40,0,145,1)"   stroke-width="8"/>
+            <path d="M -2,287  A 326,326 0 0,1 328,36" fill="none" stroke="rgba(125,0,195,1)"  stroke-width="8"/>
+          </g>`;
+        box.appendChild(rbSvg);
       }
       box.appendChild(group);
     }
@@ -626,12 +706,24 @@ class NimbusWeatherCard extends HTMLElement {
         setTimeout(spawnBolt, 800);
         this._lxInterval = setInterval(spawnBolt, 3000 + Math.random() * 5000);
       }
-      const n = condition === 'pouring' ? 55 : (['lightning','lightning-rainy'].includes(condition) ? 40 : 32);
-      for (let i = 0; i < n; i++) {
-        box.appendChild(make('rain', {
+      const iPouring   = condition === 'pouring';
+      const iLightning = ['lightning','lightning-rainy'].includes(condition);
+      // far layer — small, slow, faint
+      const nFar  = iPouring ? 35 : iLightning ? 25 : 20;
+      // near layer — large, fast, subtle
+      const nNear = iPouring ? 25 : iLightning ? 18 : 12;
+      for (let i = 0; i < nFar; i++) {
+        box.appendChild(make('rain-far', {
+          left: (Math.random() * 100) + '%',
+          animationDelay: (Math.random() * 2.5) + 's',
+          animationDuration: (1.0 + Math.random() * 0.8) + 's',
+        }));
+      }
+      for (let i = 0; i < nNear; i++) {
+        box.appendChild(make('rain-near', {
           left: (Math.random() * 100) + '%',
           animationDelay: (Math.random() * 2) + 's',
-          animationDuration: (0.7 + Math.random() * 0.8) + 's',
+          animationDuration: (0.5 + Math.random() * 0.4) + 's',
         }));
       }
       const dripCount = condition === 'pouring' ? 10 : 6;
@@ -766,14 +858,25 @@ class NimbusWeatherCard extends HTMLElement {
 .ct { position:relative; z-index:2; padding:18px; color:#fff; text-shadow:0 2px 4px rgba(0,0,0,0.35), 0 0 8px rgba(0,0,0,0.2) }
 
 /* ── RAIN ── */
-.rain {
-  position:absolute; top:-20px; width:1.5px; height:20px;
-  background:rgba(255,255,255,0.45); border-radius:2px;
-  animation:rfal linear infinite; will-change:transform;
+/* far layer — small, slow, faint */
+.rain-far {
+  position:absolute; top:-14px; width:1px; height:14px;
+  background:linear-gradient(to bottom, transparent 0%, rgba(255,255,255,0.20) 100%);
+  border-radius:2px; animation:rfal-far linear infinite; will-change:transform;
 }
-@keyframes rfal {
-  0%   { transform:translate3d(0,0,0) rotate(10deg) }
-  100% { transform:translate3d(-10px,280px,0) rotate(10deg) }
+@keyframes rfal-far {
+  0%   { transform:translate3d(0,0,0) rotate(4deg) }
+  100% { transform:translate3d(-4px,280px,0) rotate(4deg) }
+}
+/* near layer — larger, faster, subtle */
+.rain-near {
+  position:absolute; top:-28px; width:1.5px; height:28px;
+  background:linear-gradient(to bottom, transparent 0%, rgba(255,255,255,0.38) 60%, rgba(255,255,255,0.28) 100%);
+  border-radius:2px; animation:rfal-near linear infinite; will-change:transform;
+}
+@keyframes rfal-near {
+  0%   { transform:translate3d(0,0,0) rotate(5deg) }
+  100% { transform:translate3d(-6px,280px,0) rotate(5deg) }
 }
 
 /* ── SCREEN DROPLETS ── */
@@ -965,7 +1068,22 @@ class NimbusWeatherCard extends HTMLElement {
 .high { color:#ff9f7c }
 .low  { color:#7cb9ff }
 .cn2  { font-size:18px; font-weight:500; opacity:.9; text-transform:capitalize; margin-bottom:12px }
-.det  { display:flex; gap:12px; padding:10px 12px; background:rgba(0,20,60,0.22); backdrop-filter:blur(25px) saturate(200%) brightness(0.9); -webkit-backdrop-filter:blur(25px) saturate(200%) brightness(0.9); border-radius:14px; margin-bottom:12px; flex-wrap:wrap; border:1px solid rgba(255,255,255,0.18); box-shadow:0 2px 8px rgba(0,0,0,0.10) }
+.det-wrap { position:relative; margin-bottom:12px; overflow:visible; }
+.det  { display:flex; gap:12px; padding:10px 12px; background:rgba(0,20,60,0.22); backdrop-filter:blur(25px) saturate(200%) brightness(0.9); -webkit-backdrop-filter:blur(25px) saturate(200%) brightness(0.9); border-radius:14px; margin-bottom:0; flex-wrap:wrap; border:1px solid rgba(255,255,255,0.18); box-shadow:0 2px 8px rgba(0,0,0,0.10) }
+
+/* ── SPLASH LAYER ── */
+.splash-layer { position:absolute; top:-22px; left:0; right:0; height:26px; pointer-events:none; overflow:visible; z-index:10; }
+.splash-l, .splash-r {
+  position:absolute; width:2px; height:5px;
+  background:rgba(255,255,255,0.75); border-radius:50% 50% 40% 40%;
+  transform-origin:bottom center; pointer-events:none;
+}
+.splash-l { animation:splashLeft 0.45s ease-out forwards; }
+.splash-r { animation:splashRight 0.45s ease-out forwards; }
+.splash-c { position:absolute; width:3px; height:3px; background:rgba(255,255,255,0.60); border-radius:50%; pointer-events:none; animation:splashCenter 0.35s ease-out forwards; }
+@keyframes splashLeft  { 0%{transform:translate(0,0) rotate(-35deg) scaleY(1.4);opacity:.9} 60%{transform:translate(-8px,-10px) rotate(-45deg) scaleY(.8);opacity:.6} 100%{transform:translate(-12px,2px) rotate(-20deg) scaleY(.3);opacity:0} }
+@keyframes splashRight { 0%{transform:translate(0,0) rotate(35deg) scaleY(1.4);opacity:.9} 60%{transform:translate(8px,-10px) rotate(45deg) scaleY(.8);opacity:.6} 100%{transform:translate(12px,2px) rotate(20deg) scaleY(.3);opacity:0} }
+@keyframes splashCenter { 0%{transform:translate(-50%,0) scaleX(2);opacity:.8} 50%{transform:translate(-50%,-6px) scaleX(1);opacity:.5} 100%{transform:translate(-50%,0) scaleX(1);opacity:0} }
 .di   { display:flex; align-items:center; gap:5px; font-size:12px; opacity:.9 }
 .dic  { width:16px; height:16px; flex-shrink:0 }
 .fc   { display:flex; gap:0; overflow-x:auto; background:rgba(0,20,60,0.22); backdrop-filter:blur(25px) saturate(200%) brightness(0.9); -webkit-backdrop-filter:blur(25px) saturate(200%) brightness(0.9); border-radius:16px; border:1px solid rgba(255,255,255,0.18); box-shadow:0 2px 8px rgba(0,0,0,0.10) }
@@ -983,32 +1101,41 @@ class NimbusWeatherCard extends HTMLElement {
 .sv  { font-size:15px; font-weight:600; color:white }
 .su  { font-size:11px; opacity:.65; margin-left:2px }
 
+/* ── RAINBOW ── */
+.rb-svg { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:2;
+  opacity:0; animation:rbAppear 3s ease-out forwards; }
+@keyframes rbAppear { 0%,35%{opacity:0} 100%{opacity:1} }
+
 /* ── LENS FLARES ── */
 .flare-track {
   position:absolute; inset:0; pointer-events:none; z-index:2;
-  animation:flareDrift 9s ease-in-out infinite;
-  transform-origin:80% 2%;
+  animation:flareSwing 12s ease-in-out infinite;
+  transform-origin:85% 5%;
 }
-@keyframes flareDrift {
-  0%   { transform:translate3d(0px,0px,0) }
-  25%  { transform:translate3d(-8px,10px,0) }
-  50%  { transform:translate3d(-14px,18px,0) }
-  75%  { transform:translate3d(-7px,9px,0) }
-  100% { transform:translate3d(0px,0px,0) }
+@keyframes flareSwing {
+  0%,100% { transform:translate3d(0px,0px,0) }
+  50%     { transform:translate3d(0px,8px,0) }
 }
-.f1 {
-  position:absolute; border-radius:50%; pointer-events:none;
-  width:50px; height:50px; top:26%; left:38%;
-  background:radial-gradient(circle, rgba(220,240,255,0.65) 0%, rgba(180,220,255,0.30) 30%, rgba(160,200,255,0.10) 55%, transparent 72%);
-  filter:blur(5px); animation:flarePulse 9s ease-in-out infinite;
-}
-.f2 {
-  position:absolute; border-radius:50%; pointer-events:none;
-  width:24px; height:24px; top:22%; left:54%;
-  background:radial-gradient(circle, transparent 0%, transparent 42%, rgba(255,255,255,0.50) 52%, rgba(255,255,255,0.15) 62%, transparent 72%);
-  filter:blur(2px); animation:flarePulse 9s ease-in-out infinite; animation-delay:0.8s;
-}
-@keyframes flarePulse { 0%,100%{opacity:0.55;transform:scale(1)} 50%{opacity:1.0;transform:scale(1.10)} }
+.flare { position:absolute; border-radius:50%; pointer-events:none; animation:flarePulse 5s ease-in-out infinite; }
+/* f1 — large diffuse spot, near sun */
+.f1 { width:38px; height:38px; top:12%; left:62%;
+  background:radial-gradient(circle, rgba(255,255,255,0.50) 0%, rgba(255,255,255,0.18) 40%, transparent 70%);
+  filter:blur(3px); animation-delay:0s; opacity:0.7; }
+/* f2 — hollow ring */
+.f2 { width:22px; height:22px; top:28%; left:48%;
+  background:transparent; border:2px solid rgba(255,255,255,0.55);
+  box-shadow:0 0 6px rgba(255,255,255,0.3); filter:blur(1.5px);
+  animation:flarePulseRing 5s ease-in-out infinite; animation-delay:0.6s; opacity:0.65; }
+/* f3 — small soft spot */
+.f3 { width:14px; height:14px; top:44%; left:34%;
+  background:radial-gradient(circle, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.18) 45%, transparent 70%);
+  filter:blur(2px); animation-delay:1.2s; opacity:0.45; }
+/* f4 — tiny bright dot */
+.f4 { width:7px; height:7px; top:60%; left:20%;
+  background:radial-gradient(circle, rgba(255,255,255,0.80) 0%, rgba(255,255,255,0.25) 55%, transparent 75%);
+  filter:blur(1px); animation-delay:1.8s; opacity:0.55; }
+@keyframes flarePulseRing { 0%,100%{opacity:0.35} 50%{opacity:0.75} }
+@keyframes flarePulse { 0%,100%{opacity:0.4;transform:scale(1)} 50%{opacity:0.9;transform:scale(1.15)} }
 </style>
 
 <div class="wrapper">
@@ -1063,7 +1190,17 @@ class NimbusWeatherCard extends HTMLElement {
     const items   = forecast.slice(0, this._config.max_items);
 
     const bgEl = this.shadowRoot.getElementById('bg');
-    if (bgEl) bgEl.className = 'bg ' + bgCls;
+    if (bgEl) {
+      bgEl.className = 'bg ' + bgCls;
+      const dynGrad = this._elevationBg(cond, isNight);
+      if (dynGrad) {
+        bgEl.style.background = dynGrad;
+        bgEl.style.transition = 'background 90s ease';
+      } else {
+        bgEl.style.background = '';
+        bgEl.style.transition = '';
+      }
+    }
 
     const ct = this.shadowRoot.getElementById('ct');
     if (ct) {
@@ -1075,11 +1212,14 @@ class NimbusWeatherCard extends HTMLElement {
         <div class="hl"><span class="high">↑${this._t(items[0]?.temperature ?? attrs.temperature)}°</span>  <span class="low">↓${this._t(items[0]?.templow ?? attrs.temperature)}°</span></div>
         <div class="cn2">${COND_LABELS[cond] || cond.replace(/-/g,' ')}</div>
         ${this._config.show_details ? `
-        <div class="det">
-          <div class="di"><div class="dic">${MDI.humidity}</div>${this._t(attrs.humidity)}%</div>
-          <div class="di"><div class="dic">${MDI.wind}</div>${this._windSpeed(attrs)}</div>
-          <div class="di"><div class="dic">${MDI.pressure}</div>${this._t(attrs.pressure)} hPa</div>
-          ${(attrs.feels_like !== undefined || attrs.apparent_temperature !== undefined) ? `<div class="di"><div class="dic">${MDI.thermometer}</div>Feels ${this._t(attrs.feels_like ?? attrs.apparent_temperature)}°</div>` : ''}
+        <div class="det-wrap">
+          <div class="det" id="det">
+            <div class="di"><div class="dic">${MDI.humidity}</div>${this._t(attrs.humidity)}%</div>
+            <div class="di"><div class="dic">${MDI.wind}</div>${this._windSpeed(attrs)}</div>
+            <div class="di"><div class="dic">${MDI.pressure}</div>${this._t(attrs.pressure)} hPa</div>
+            ${(attrs.feels_like !== undefined || attrs.apparent_temperature !== undefined) ? `<div class="di"><div class="dic">${MDI.thermometer}</div>Feels ${this._t(attrs.feels_like ?? attrs.apparent_temperature)}°</div>` : ''}
+          </div>
+          <div class="splash-layer" id="splash-layer"></div>
         </div>` : ''}
         ${this._config.show_forecast && items.length ? `
         <div class="fc">
@@ -1108,12 +1248,53 @@ class NimbusWeatherCard extends HTMLElement {
         </div>` : ''}
       `;
     }
-    this._injectParticles(cond, isNight, moonPhase);
+    this._injectParticlesAsync(cond, isNight, moonPhase);
+    this._initDetSplash(cond);
     // UFO easter egg — only for clear-night
     if (this._config.ufo_easter_egg && cond === 'clear-night' && isNight) {
       this._initUfo();
     } else {
       this._destroyUfo();
+    }
+  }
+
+  _initDetSplash(condition) {
+    // Καθαρισμός παλιού interval
+    if (this._splashInterval) { clearInterval(this._splashInterval); this._splashInterval = null; }
+
+    const rainConditions = ['rainy','pouring','lightning','lightning-rainy','snowy-rainy'];
+    if (!rainConditions.includes(condition)) return;
+
+    // Ρυθμός ανάλογα με ένταση βροχής
+    const rate = {
+      'rainy':           { min:600, max:1200, streams:2 },
+      'snowy-rainy':     { min:700, max:1300, streams:2 },
+      'lightning':       { min:400, max:900,  streams:3 },
+      'lightning-rainy': { min:350, max:800,  streams:4 },
+      'pouring':         { min:200, max:550,  streams:5 },
+    }[condition] || { min:600, max:1200, streams:2 };
+
+    const spawnCrown = () => {
+      const layer = this.shadowRoot.getElementById('splash-layer');
+      if (!layer) return;
+      const w = layer.offsetWidth;
+      if (!w) return;
+      const x = 12 + Math.random() * (w - 24);
+
+      const l = document.createElement('div'); l.className = 'splash-l';
+      const r = document.createElement('div'); r.className = 'splash-r';
+      const c = document.createElement('div'); c.className = 'splash-c';
+      l.style.cssText = r.style.cssText = c.style.cssText = `left:${x}px;bottom:0`;
+      layer.appendChild(l); layer.appendChild(r); layer.appendChild(c);
+      setTimeout(() => { l.remove(); r.remove(); c.remove(); }, 500);
+    };
+
+    // stagger streams
+    for (let i = 0; i < rate.streams; i++) {
+      setTimeout(() => {
+        spawnCrown();
+        this._splashInterval = setInterval(spawnCrown, rate.min + Math.random() * (rate.max - rate.min));
+      }, i * 300);
     }
   }
 
@@ -1155,7 +1336,7 @@ class NimbusWeatherCard extends HTMLElement {
 
   _scheduleUfo() {
     if (!this._ufoActive) return;
-    const delay = 1800000 + Math.random() * 600000; // 30-40 minutes
+    const delay = 240000 + Math.random() * 120000; // 4-6 minutes
     this._ufoTimer = setTimeout(() => this._runUfo(), delay);
   }
 
