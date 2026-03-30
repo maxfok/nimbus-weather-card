@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.5.0
+ * Nimbus Weather Card v1.5.2
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -1381,7 +1381,12 @@ class NimbusWeatherCard extends HTMLElement {
     if (!ufo || !cow || !beam) return;
     const bctx = beam.getContext('2d');
 
-    const DET_TOP=260, COW_FS=20, COW_X=90;
+    const detEl  = shadow.getElementById('det') || shadow.querySelector('.fc');
+    const cardEl = shadow.getElementById('card');
+    const cardRect = cardEl ? cardEl.getBoundingClientRect() : {top:0};
+    const detRect  = detEl  ? detEl.getBoundingClientRect()  : null;
+    const DET_TOP  = detRect ? detRect.top - cardRect.top : 220;
+    const COW_FS=20, COW_X=90;
     const COW_TOP = DET_TOP - COW_FS - 3;
     const UFO_FS=24, UFO_X=COW_X, UFO_Y_HOVER=COW_TOP-UFO_FS-28;
 
@@ -1426,11 +1431,11 @@ class NimbusWeatherCard extends HTMLElement {
       cow.style.transform='scale(1)';
       // Phase 2: UFO flies in
       ufo.style.opacity='1'; ufo.style.fontSize=UFO_FS+'px';
-      ufo.style.left='-30px'; ufo.style.top='180px';
+      ufo.style.left='-30px'; ufo.style.top=(DET_TOP - 80)+'px';
       anim(1800,t=>{
         const e=easeInOut(t);
         ufo.style.left=lerp(-30,UFO_X,e)+'px';
-        ufo.style.top=lerp(180,UFO_Y_HOVER,e)+'px';
+        ufo.style.top=lerp(DET_TOP-80,UFO_Y_HOVER,e)+'px';
       },()=>{
         // Phase 3: Bob + beam
         const yStart=UFO_Y_HOVER,yEnd=UFO_Y_HOVER+6;
