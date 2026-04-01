@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.5.2
+ * Nimbus Weather Card v1.5.3
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -332,7 +332,7 @@ class NimbusWeatherCard extends HTMLElement {
       temperature_unit: config.temperature_unit || 'C',
       use_24h: config.use_24h !== false,
       show_feels_like: config.show_feels_like !== false,
-      animation_speed: config.animation_speed || 1,
+      animation_speed: 0,
       local_sensors: config.local_sensors || [],
       ufo_easter_egg: config.ufo_easter_egg !== false,
     };
@@ -368,7 +368,7 @@ class NimbusWeatherCard extends HTMLElement {
 
   disconnectedCallback() {
     if (this._lxInterval)   { clearInterval(this._lxInterval);   this._lxInterval   = null; }
-    if (this._splashInterval){ clearInterval(this._splashInterval); this._splashInterval = null; }
+    if (this._splashIntervals) { this._splashIntervals.forEach(id => clearInterval(id)); this._splashIntervals = []; }
     if (this._timeInterval) { clearInterval(this._timeInterval);  this._timeInterval = null; }
     if (this._dripInterval) { clearInterval(this._dripInterval);  this._dripInterval = null; }
     if (this._forecastUnsub) { this._forecastUnsub(); this._forecastUnsub = null; }
@@ -478,6 +478,10 @@ class NimbusWeatherCard extends HTMLElement {
     const key = condition + '|' + isNight + '|' + (moonPhase || '') + '|' + Math.round(elevation / 5) + '|' + humBucket + '|' + recentRain + '|' + flareBucket;
     if (this._lastParticleKey === key) return;
     this._lastParticleKey = key;
+
+    // Speed multiplier: 0 = normal (1x), 1 = fast (0.5x), 2 = very fast (0.25x)
+    const animSpeed = this._config.animation_speed ?? 0;
+    const spd = animSpeed === 0 ? 1 : animSpeed === 1 ? 0.5 : 0.25;
     box.innerHTML = '';
     if (this._lxInterval) { clearInterval(this._lxInterval); this._lxInterval = null; }
 
@@ -672,7 +676,7 @@ class NimbusWeatherCard extends HTMLElement {
           left: (Math.random() * 100) + '%',
           width: s + 'px', height: s + 'px',
           animationDelay: (Math.random() * 4) + 's',
-          animationDuration: (1.8 + Math.random() * 2.2) + 's',
+          animationDuration: ((1.8 + Math.random() * 2.2) * spd) + 's',
         }));
       }
     }
@@ -717,14 +721,14 @@ class NimbusWeatherCard extends HTMLElement {
         box.appendChild(make('rain-far', {
           left: (Math.random() * 100) + '%',
           animationDelay: (Math.random() * 2.5) + 's',
-          animationDuration: (1.0 + Math.random() * 0.8) + 's',
+          animationDuration: ((1.0 + Math.random() * 0.8) * spd) + 's',
         }));
       }
       for (let i = 0; i < nNear; i++) {
         box.appendChild(make('rain-near', {
           left: (Math.random() * 100) + '%',
           animationDelay: (Math.random() * 2) + 's',
-          animationDuration: (0.5 + Math.random() * 0.4) + 's',
+          animationDuration: ((0.5 + Math.random() * 0.4) * spd) + 's',
         }));
       }
       const dripCount = condition === 'pouring' ? 10 : 6;
@@ -735,8 +739,8 @@ class NimbusWeatherCard extends HTMLElement {
         const delay = Math.random() * 12;
         const dur = 4 + Math.random() * 6;
         const size = condition === 'pouring' ? (4 + Math.random() * 5) : (3 + Math.random() * 3);
-        box.appendChild(make('drip', { left: left+'%', top: top+'%', width: size+'px', height: size+'px', animationDelay: delay+'s', animationDuration: dur+'s' }));
-        box.appendChild(make('drip-trail', { left: (left+0.1)+'%', top: (top+2)+'%', animationDelay: (delay+0.5)+'s', animationDuration: dur+'s' }));
+        box.appendChild(make('drip', { left: left+'%', top: top+'%', width: size+'px', height: size+'px', animationDelay: delay+'s', animationDuration: (dur * spd) + 's' }));
+        box.appendChild(make('drip-trail', { left: (left+0.1)+'%', top: (top+2)+'%', animationDelay: (delay+0.5)+'s', animationDuration: (dur * spd) + 's' }));
       }
       return;
     }
@@ -749,7 +753,7 @@ class NimbusWeatherCard extends HTMLElement {
           left: (Math.random() * 100) + '%',
           width: s + 'px', height: s + 'px',
           animationDelay: (Math.random() * 5) + 's',
-          animationDuration: (4 + Math.random() * 4) + 's',
+          animationDuration: ((4 + Math.random() * 4) * spd) + 's',
         }));
       }
       box.appendChild(make('snow-shimmer', {}));
@@ -795,7 +799,7 @@ class NimbusWeatherCard extends HTMLElement {
           left: '-30%',
           width: (40 + Math.random() * 60) + 'px',
           animationDelay: (Math.random() * 5) + 's',
-          animationDuration: (2 + Math.random() * 3) + 's',
+          animationDuration: ((2 + Math.random() * 3) * spd) + 's',
           opacity: (0.15 + Math.random() * 0.25).toFixed(2),
         }));
       }
@@ -1292,19 +1296,19 @@ class NimbusWeatherCard extends HTMLElement {
 
   _initDetSplash(condition) {
     // Καθαρισμός παλιού interval
-    if (this._splashInterval) { clearInterval(this._splashInterval); this._splashInterval = null; }
+    if (this._splashIntervals) { this._splashIntervals.forEach(id => clearInterval(id)); this._splashIntervals = []; }
 
     const rainConditions = ['rainy','pouring','lightning','lightning-rainy','snowy-rainy'];
     if (!rainConditions.includes(condition)) return;
 
     // Ρυθμός ανάλογα με ένταση βροχής
     const rate = {
-      'rainy':           { min:600, max:1200, streams:2 },
-      'snowy-rainy':     { min:700, max:1300, streams:2 },
-      'lightning':       { min:400, max:900,  streams:3 },
-      'lightning-rainy': { min:350, max:800,  streams:4 },
-      'pouring':         { min:200, max:550,  streams:5 },
-    }[condition] || { min:600, max:1200, streams:2 };
+      'rainy':           { min:900, max:1800, streams:1 },
+      'snowy-rainy':     { min:1000, max:2000, streams:1 },
+      'lightning':       { min:600, max:1200, streams:2 },
+      'lightning-rainy': { min:500, max:1000, streams:3 },
+      'pouring':         { min:300, max:700,  streams:4 },
+    }[condition] || { min:900, max:1800, streams:1 };
 
     const spawnCrown = () => {
       const layer = this.shadowRoot.getElementById('splash-layer');
@@ -1322,10 +1326,12 @@ class NimbusWeatherCard extends HTMLElement {
     };
 
     // stagger streams
+    this._splashIntervals = [];
     for (let i = 0; i < rate.streams; i++) {
       setTimeout(() => {
         spawnCrown();
-        this._splashInterval = setInterval(spawnCrown, rate.min + Math.random() * (rate.max - rate.min));
+        const iv = setInterval(spawnCrown, rate.min + Math.random() * (rate.max - rate.min));
+        this._splashIntervals.push(iv);
       }, i * 300);
     }
   }
@@ -1677,10 +1683,12 @@ class NimbusWeatherCardEditor extends HTMLElement {
 <div class="section">
   <div class="section-title">Performance</div>
   <div class="row">
-    <div><div class="label">Animation Speed</div><div class="sublabel">0 = off, 1 = normal, 2 = fast</div></div>
-    <div class="speed-row">
-      <input type="range" id="animation_speed" min="0" max="2" step="0.5" value="${this._val('animation_speed',1)}">
-      <span class="speed-val" id="speed-val">${this._val('animation_speed',1)}</span>
+    <div><div class="label">⚡ Animation Speed</div><div class="sublabel">0 = off, 1 = normal, 2 = fast</div></div>
+    <div class="speed-row" style="width:160px">
+      <input type="range" id="animation_speed" min="0" max="2" step="0.1"
+        value="${this._val('animation_speed', 0)}"
+        oninput="this.nextElementSibling.textContent=parseFloat(this.value).toFixed(1)">
+      <span class="speed-val">${parseFloat(this._val('animation_speed', 0)).toFixed(1)}</span>
     </div>
   </div>
   <div class="row">
@@ -1731,7 +1739,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
         show_feels_like: sr.getElementById('show_feels_like')?.checked ?? true,
         temperature_unit: sr.getElementById('temperature_unit')?.value || 'C',
         use_24h: sr.getElementById('use_24h')?.checked ?? true,
-        animation_speed: parseFloat(sr.getElementById('animation_speed')?.value ?? 1),
+        animation_speed: parseFloat(sr.getElementById('animation_speed')?.value ?? 0),
         ufo_easter_egg: sr.getElementById('ufo_easter_egg')?.checked ?? true,
         local_sensors: getSensors(),
       };
@@ -1749,11 +1757,6 @@ class NimbusWeatherCardEditor extends HTMLElement {
       el.addEventListener('change', upd);
     });
 
-    const spd = sr.getElementById('animation_speed');
-    const spdVal = sr.getElementById('speed-val');
-    if (spd && spdVal) {
-      spd.addEventListener('input', () => { spdVal.textContent = spd.value; upd(); });
-    }
 
     // Add sensor button
     sr.getElementById('add-sensor')?.addEventListener('click', () => {
