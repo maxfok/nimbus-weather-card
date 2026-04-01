@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.5.3
+ * Nimbus Weather Card v1.5.4
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -332,7 +332,7 @@ class NimbusWeatherCard extends HTMLElement {
       temperature_unit: config.temperature_unit || 'C',
       use_24h: config.use_24h !== false,
       show_feels_like: config.show_feels_like !== false,
-      animation_speed: 0,
+      animation_speed: config.animation_speed ?? 0,
       local_sensors: config.local_sensors || [],
       ufo_easter_egg: config.ufo_easter_egg !== false,
     };
@@ -381,7 +381,8 @@ class NimbusWeatherCard extends HTMLElement {
     // Calculate moon phase from date when no sensor
     const date = new Date();
     const year = date.getFullYear(), month = date.getMonth() + 1, day = date.getDate();
-    const c = Math.floor((year - 1900) * 365.25);
+    const adjYear = month <= 2 ? year - 1 : year;
+    const c = Math.floor((adjYear - 1900) * 365.25);
     const e = Math.floor(30.6 * (month > 2 ? month - 2 : month + 10));
     const jd = c + e + day - 694039.09;
     const phase = ((jd / 29.5305882) % 1 + 1) % 1;
@@ -472,7 +473,6 @@ class NimbusWeatherCard extends HTMLElement {
     if (!box) return;
 
     const elevation = this._sunElevation();
-    const humidity  = this._hass?.states[this._config.entity]?.attributes?.humidity ?? 0;
     const humBucket = (recentRain && elevation >= 12 && elevation < 42) ? 'rainbow' : 'dry';
     const flareBucket = (condition === 'sunny' && elevation > 50) ? 'flares' : 'noflares';
     const key = condition + '|' + isNight + '|' + (moonPhase || '') + '|' + Math.round(elevation / 5) + '|' + humBucket + '|' + recentRain + '|' + flareBucket;
@@ -613,7 +613,6 @@ class NimbusWeatherCard extends HTMLElement {
       }
 
       // ── RAINBOW — partlycloudy/sunny + πρόσφατη βροχή (2h) + elevation 12-42° ──
-      const humidity = this._hass?.states[this._config.entity]?.attributes?.humidity ?? 0;
       const elev = this._sunElevation();
       if (['partlycloudy','sunny'].includes(condition) && !isNight && recentRain && elev >= 12 && elev < 42) {
         const rbSvg = document.createElementNS('http://www.w3.org/2000/svg','svg');
@@ -948,7 +947,6 @@ class NimbusWeatherCard extends HTMLElement {
   background:radial-gradient(circle, rgba(255,252,200,0.14) 0%, rgba(200,220,255,0.06) 45%, transparent 70%);
   filter:blur(12px); animation:moonPulse 8s ease-in-out infinite; }
 
- */
 .sun-glow-group { position:absolute; inset:0; pointer-events:none; animation:sunGroupDrift 16s ease-in-out infinite }
 @keyframes sunGroupDrift { 0%,100%{transform:translate3d(3px,-2px,0)} 50%{transform:translate3d(-3px,2px,0)} }
 
@@ -1184,8 +1182,7 @@ class NimbusWeatherCard extends HTMLElement {
     this.shadowRoot.getElementById('card').addEventListener('click', () => {
       const entity = this._config && this._config.entity;
       if (!entity) return;
-      const event = new Event('hass-more-info', { bubbles: true, composed: true });
-      event.detail = { entityId: entity };
+      const event = new CustomEvent('hass-more-info', { bubbles: true, composed: true, detail: { entityId: entity } });
       this.dispatchEvent(event);
     });
   }
