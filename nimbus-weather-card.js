@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.5.4
+ * Nimbus Weather Card v1.5.5
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -1750,7 +1750,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
       this._fire(cfg);
     };
 
-    sr.querySelectorAll('select, input[type="text"], input[type="checkbox"]').forEach(el => {
+    sr.querySelectorAll('select, input[type="text"], input[type="checkbox"], input[type="range"]').forEach(el => {
       el.addEventListener('change', upd);
     });
 
