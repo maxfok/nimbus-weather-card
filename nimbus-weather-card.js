@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.6.0.1
+ * Nimbus Weather Card v1.6.0.2
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -727,7 +727,7 @@ class NimbusWeatherCard extends HTMLElement {
       const nNear = iPouring ? 25 : iLightning ? 18 : 12;
       const makeRainDrop = (near) => {
         const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
-        const w = near ? 3 : 2;
+        const w = near ? 2 : 1.5;
         const h = near ? 22 : 12;
         const op = near ? 0.75 : 0.45;
         const dur = near
