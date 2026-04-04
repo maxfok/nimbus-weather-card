@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.5.6
+ * Nimbus Weather Card v1.6.0
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -523,6 +523,15 @@ class NimbusWeatherCard extends HTMLElement {
       const moonHaze = document.createElement('div'); moonHaze.className = 'moon-haze';
       const moonBody = document.createElement('div'); moonBody.className = 'moon-body';
       moonBody.innerHTML = getMoonSVGLarge(moonPhase);
+
+      // Moon rotation based on latitude
+      // Northern hemisphere (lat > 0): moon tilts right (positive degrees)
+      // Southern hemisphere (lat < 0): moon tilts left (negative degrees)
+      // Equator (lat = 0): no tilt
+      const lat = this._hass?.config?.latitude ?? 0;
+      const moonRotation = lat * 0.5; // ~45° at poles, 0° at equator
+      moonBody.style.transform = `rotate(${moonRotation}deg)`;
+
       moonGroup.appendChild(moonHaze);
       moonGroup.appendChild(moonBody);
       box.appendChild(moonGroup);
@@ -716,20 +725,27 @@ class NimbusWeatherCard extends HTMLElement {
       const nFar  = iPouring ? 35 : iLightning ? 25 : 20;
       // near layer — large, fast, subtle
       const nNear = iPouring ? 25 : iLightning ? 18 : 12;
-      for (let i = 0; i < nFar; i++) {
-        box.appendChild(make('rain-far', {
-          left: (Math.random() * 100) + '%',
-          animationDelay: (Math.random() * 2.5) + 's',
-          animationDuration: ((1.0 + Math.random() * 0.8) * spd) + 's',
-        }));
-      }
-      for (let i = 0; i < nNear; i++) {
-        box.appendChild(make('rain-near', {
-          left: (Math.random() * 100) + '%',
-          animationDelay: (Math.random() * 2) + 's',
-          animationDuration: ((0.5 + Math.random() * 0.4) * spd) + 's',
-        }));
-      }
+      const makeRainDrop = (near) => {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+        const w = near ? 5 : 3;
+        const h = near ? 26 : 14;
+        const op = near ? 0.75 : 0.45;
+        const dur = near
+          ? ((0.5 + Math.random() * 0.4) * spd) + 's'
+          : ((1.0 + Math.random() * 0.8) * spd) + 's';
+        svg.setAttribute('viewBox','0 0 10 28');
+        svg.style.cssText = `position:absolute;width:${w}px;height:${h}px;
+          left:${Math.random()*100}%;top:-${h+4}px;
+          opacity:${op};overflow:visible;pointer-events:none;
+          animation:${near?'rfal-near':'rfal-far'} linear infinite;
+          animation-delay:${Math.random()*(near?2:2.5)}s;
+          animation-duration:${dur};
+          will-change:transform;`;
+        svg.innerHTML = `<path d="M5 0 Q9 10 9 18 A4 4 0 0 1 1 18 Q1 10 5 0Z" fill="white"/>`;
+        return svg;
+      };
+      for (let i = 0; i < nFar; i++)  box.appendChild(makeRainDrop(false));
+      for (let i = 0; i < nNear; i++) box.appendChild(makeRainDrop(true));
       const dripCount = condition === 'pouring' ? 10 : 6;
       const slotW = 96 / dripCount; // μοιράζουμε το πλάτος σε ίσα slots
       for (let i = 0; i < dripCount; i++) {
@@ -865,8 +881,8 @@ class NimbusWeatherCard extends HTMLElement {
 /* far layer — small, slow, faint */
 .rain-far {
   position:absolute; top:-14px; width:1px; height:14px;
-  background:linear-gradient(to bottom, transparent 0%, rgba(255,255,255,0.20) 100%);
-  border-radius:2px; animation:rfal-far linear infinite; will-change:transform;
+  background:linear-gradient(to bottom, transparent 0%, rgba(255,255,255,0.15) 50%, rgba(255,255,255,0.55) 100%);
+  border-radius:0 0 1px 1px; animation:rfal-far linear infinite; will-change:transform;
 }
 @keyframes rfal-far {
   0%   { transform:translate3d(0,0,0) rotate(4deg) }
@@ -875,8 +891,8 @@ class NimbusWeatherCard extends HTMLElement {
 /* near layer — larger, faster, subtle */
 .rain-near {
   position:absolute; top:-28px; width:1.5px; height:28px;
-  background:linear-gradient(to bottom, transparent 0%, rgba(255,255,255,0.38) 60%, rgba(255,255,255,0.28) 100%);
-  border-radius:2px; animation:rfal-near linear infinite; will-change:transform;
+  background:linear-gradient(to bottom, transparent 0%, rgba(255,255,255,0.25) 50%, rgba(255,255,255,0.80) 100%);
+  border-radius:0 0 1px 1px; animation:rfal-near linear infinite; will-change:transform;
 }
 @keyframes rfal-near {
   0%   { transform:translate3d(0,0,0) rotate(5deg) }
@@ -1300,12 +1316,12 @@ class NimbusWeatherCard extends HTMLElement {
 
     // Ρυθμός ανάλογα με ένταση βροχής
     const rate = {
-      'rainy':           { min:900, max:1800, streams:1 },
-      'snowy-rainy':     { min:1000, max:2000, streams:1 },
-      'lightning':       { min:600, max:1200, streams:2 },
-      'lightning-rainy': { min:500, max:1000, streams:3 },
-      'pouring':         { min:300, max:700,  streams:4 },
-    }[condition] || { min:900, max:1800, streams:1 };
+      'rainy':           { min:500, max:900,  streams:3 },
+      'snowy-rainy':     { min:600, max:1000, streams:2 },
+      'lightning':       { min:350, max:700,  streams:4 },
+      'lightning-rainy': { min:250, max:550,  streams:6 },
+      'pouring':         { min:150, max:350,  streams:8 },
+    }[condition] || { min:500, max:900, streams:3 };
 
     const spawnCrown = () => {
       const layer = this.shadowRoot.getElementById('splash-layer');
