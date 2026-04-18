@@ -1,5 +1,5 @@
 /**
- * Nimbus Weather Card v1.6.0.2
+ * Nimbus Weather Card v1.7.0
  * Apple Weather-inspired card for Home Assistant
  */
 
@@ -167,7 +167,7 @@ function _moonLitPath(phase, r, cx, cy) {
   const isNew    = phase === 'new_moon';
   const isFull   = phase === 'full_moon';
 
-  if (isNew)  return `M${cx},${cy-r} A${r},${r} 0 0,1 ${cx},${cy+r} A0,${r} 0 0,0 ${cx},${cy-r} Z`; // κενό
+  if (isNew)  return `M${cx},${cy} Z`; // zero-area → μόνο σκοτεινός δίσκος
   if (isFull) return `M${cx},${cy-r} A${r},${r} 0 1,1 ${cx},${cy+r} A${r},${r} 0 1,1 ${cx},${cy-r} Z`; // πλήρες
 
   if (isWaxing) {
@@ -201,6 +201,7 @@ function getMoonSVG(phase) {
   const r = 10, cx = 12, cy = 12;
   const litPath = _moonLitPath(phase, r, cx, cy);
   const uid = 'sm' + phase;
+  const isNew = phase === 'new_moon';
   return `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
     <defs>
       <radialGradient id="mg${uid}" cx="60%" cy="40%" r="65%">
@@ -210,10 +211,14 @@ function getMoonSVG(phase) {
       <clipPath id="lc${uid}"><path d="${litPath}"/></clipPath>
     </defs>
     <circle cx="${cx}" cy="${cy}" r="${r}" fill="#252938" clip-path="url(#mc${uid})"/>
+    ${isNew ? `
+    <g clip-path="url(#mc${uid})">
+      ${_moonCraters(r, cx, cy, 0.08)}
+    </g>` : `
     <g clip-path="url(#lc${uid})">
       <circle cx="${cx}" cy="${cy}" r="${r}" fill="url(#mg${uid})"/>
       ${_moonCraters(r, cx, cy, 0.45)}
-    </g>
+    </g>`}
   </svg>`;
 }
 
@@ -222,6 +227,7 @@ function getMoonSVGLarge(phase) {
   const r = 28, cx = 32, cy = 32;
   const litPath = _moonLitPath(phase, r, cx, cy);
   const uid = 'lg' + phase;
+  const isNew = phase === 'new_moon';
   return `<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
     <defs>
       <radialGradient id="mg${uid}" cx="60%" cy="40%" r="65%">
@@ -236,10 +242,14 @@ function getMoonSVGLarge(phase) {
       <clipPath id="lc${uid}"><path d="${litPath}"/></clipPath>
     </defs>
     <circle cx="${cx}" cy="${cy}" r="${r}" fill="#252938" clip-path="url(#mc${uid})"/>
+    ${isNew ? `
+    <g clip-path="url(#mc${uid})">
+      ${_moonCraters(r, cx, cy, 0.12)}
+    </g>` : `
     <g clip-path="url(#lc${uid})">
       <circle cx="${cx}" cy="${cy}" r="${r}" fill="url(#mg${uid})"/>
       ${_moonCraters(r, cx, cy, 0.55)}
-    </g>
+    </g>`}
     <circle cx="${cx}" cy="${cy}" r="${r}" fill="url(#gd${uid})" clip-path="url(#mc${uid})"/>
   </svg>`;
 }
@@ -333,6 +343,8 @@ class NimbusWeatherCard extends HTMLElement {
       use_24h: config.use_24h !== false,
       show_feels_like: config.show_feels_like !== false,
       animation_speed: config.animation_speed ?? 0,
+      wind_unit: config.wind_unit || 'kmh',
+      show_clock: config.show_clock || false,
       local_sensors: config.local_sensors || [],
       ufo_easter_egg: config.ufo_easter_egg !== false,
     };
@@ -343,10 +355,53 @@ class NimbusWeatherCard extends HTMLElement {
     const speed = attrs.wind_speed;
     const unit  = attrs.wind_speed_unit || 'km/h';
     if (speed === undefined || speed === null) return '--';
-    // Μετατροπή αν το HA δίνει mph
+
+    // Μετατροπή σε km/h για εσωτερικούς υπολογισμούς
+    let kmh = speed;
+    if (unit === 'mph') kmh = speed * 1.60934;
+    else if (unit === 'm/s') kmh = speed * 3.6;
+
+    // Beaufort scale
+    if (this._config.wind_unit === 'beaufort') {
+      const bft = kmh < 1 ? 0 : kmh < 6 ? 1 : kmh < 12 ? 2 : kmh < 20 ? 3 :
+                  kmh < 29 ? 4 : kmh < 39 ? 5 : kmh < 50 ? 6 : kmh < 62 ? 7 :
+                  kmh < 75 ? 8 : kmh < 89 ? 9 : kmh < 103 ? 10 : kmh < 117 ? 11 : 12;
+      return `${bft} Bft`;
+    }
+
     if (unit === 'mph') return `${this._t(speed)} mph`;
-    if (unit === 'm/s')  return `${(speed * 3.6).toFixed(1)} km/h`;
+    if (unit === 'm/s')  return `${kmh.toFixed(1)} km/h`;
     return `${this._t(speed)} ${unit}`;
+  }
+
+  // Επιστρέφει την κλίση (skew σε px/280px) βάσει wind_bearing & wind_speed
+  _windSkew(attrs) {
+    const bearing = attrs.wind_bearing; // 0-360°
+    const speed   = attrs.wind_speed;
+    const unit    = attrs.wind_speed_unit || 'km/h';
+    if (bearing === undefined || bearing === null || speed === undefined) return { far: 4, near: 6 };
+
+    // Μετατροπή σε km/h
+    let kmh = speed;
+    if (unit === 'mph') kmh = speed * 1.60934;
+    else if (unit === 'm/s') kmh = speed * 3.6;
+
+    // Κλίση βάσει κατεύθυνσης: bearing = μοίρες από Βορρά (0=N, 90=E, 180=S, 270=W)
+    // Οι σταγόνες πέφτουν προς τα κάτω, ο αέρας τις σπρώχνει οριζόντια
+    // bearing 0-180 (N,E,S) = σταγόνες κλίνουν δεξιά (θετικό skew)
+    // bearing 180-360 (S,W,N) = σταγόνες κλίνουν αριστερά (αρνητικό skew)
+    const rad = (bearing * Math.PI) / 180;
+    const horizontalComponent = Math.sin(rad); // -1 (W) έως +1 (E)
+
+    // Ένταση skew: 0-20km/h = ελάχιστη, 20-50 = μέτρια, 50+ = έντονη
+    const intensity = Math.min(kmh / 50, 1); // 0-1
+    const maxSkew = 40; // px για 280px ύψος (περίπου 8° κλίση)
+
+    const skew = horizontalComponent * intensity * maxSkew;
+    return {
+      far:  Math.round(skew * 0.7), // far layer λιγότερο
+      near: Math.round(skew),        // near layer περισσότερο
+    };
   }
 
   connectedCallback() {
@@ -356,6 +411,8 @@ class NimbusWeatherCard extends HTMLElement {
         this._render();
       }
     }, 60000);
+    // Clock tick — κάθε δευτερόλεπτο αν show_clock
+    this._clockInterval = setInterval(() => { this._tickClock(); }, 1000);
     // Re-inject σταγόνες κάθε 5 λεπτά για τυχαία θέση
     this._dripInterval = setInterval(() => {
       const cond = this._hass && this._config && this._hass.states[this._config.entity]?.state?.toLowerCase();
@@ -371,12 +428,18 @@ class NimbusWeatherCard extends HTMLElement {
     if (this._splashIntervals) { this._splashIntervals.forEach(id => clearInterval(id)); this._splashIntervals = []; }
     if (this._timeInterval) { clearInterval(this._timeInterval);  this._timeInterval = null; }
     if (this._dripInterval) { clearInterval(this._dripInterval);  this._dripInterval = null; }
+    if (this._clockInterval) { clearInterval(this._clockInterval); this._clockInterval = null; }
+    if (this._rafId)        { cancelAnimationFrame(this._rafId);  this._rafId        = null; }
+    if (this._ufoTimer)     { clearTimeout(this._ufoTimer);       this._ufoTimer     = null; }
     if (this._forecastUnsub) { this._forecastUnsub(); this._forecastUnsub = null; }
+    this._ufoActive = false;
   }
 
   _moonPhase() {
     if (this._config.moon_entity && this._hass.states[this._config.moon_entity]) {
-      return this._hass.states[this._config.moon_entity].state;
+      // Normalize: "New moon" → "new_moon", "Waxing crescent" → "waxing_crescent" κλπ
+      const raw = this._hass.states[this._config.moon_entity].state;
+      return raw.toLowerCase().replace(/\s+/g, '_');
     }
     // Calculate moon phase from date when no sensor
     const date = new Date();
@@ -406,7 +469,9 @@ class NimbusWeatherCard extends HTMLElement {
     return Math.max(-5, Math.min(90, Math.sin((h - 6) / 12 * Math.PI) * 60 - 5));
   }
 
-  _isNight() {
+  _isNight(condition) {
+    // clear-night condition → πάντα νύχτα
+    if (condition === 'clear-night') return true;
     // Αν έχουμε sun_entity, χρησιμοποιούμε το επίσημο state του HA
     if (this._config && this._config.sun_entity && this._hass) {
       const sun = this._hass.states[this._config.sun_entity];
@@ -463,12 +528,12 @@ class NimbusWeatherCard extends HTMLElement {
     } catch(e) { return false; }
   }
 
-  async _injectParticlesAsync(condition, isNight, moonPhase) {
+  async _injectParticlesAsync(condition, isNight, moonPhase, attrs = {}) {
     const recentRain = await this._recentRain();
-    this._injectParticles(condition, isNight, moonPhase, recentRain);
+    this._injectParticles(condition, isNight, moonPhase, recentRain, attrs);
   }
 
-  _injectParticles(condition, isNight, moonPhase, recentRain = false) {
+  _injectParticles(condition, isNight, moonPhase, recentRain = false, attrs = {}) {
     const box = this.shadowRoot.getElementById('ptcl');
     if (!box) return;
 
@@ -493,7 +558,7 @@ class NimbusWeatherCard extends HTMLElement {
     };
 
     // ── BASE LAYER: ΦΕΓΓΑΡΙ (όλες οι νύχτες) ──
-    if (isNight && moonPhase && moonPhase !== 'new_moon') {
+    if (isNight && moonPhase) {
       // Opacity ανάλογα με συνθήκη — πίσω από σύννεφα/ομίχλη/χιόνι
       const moonOpacity = {
         'clear-night': 1, 'sunny': 1,
@@ -886,7 +951,7 @@ class NimbusWeatherCard extends HTMLElement {
 }
 @keyframes rfal-far {
   0%   { transform:translate3d(0,0,0) rotate(4deg) }
-  100% { transform:translate3d(-4px,280px,0) rotate(4deg) }
+  100% { transform:translate3d(calc(-4px + var(--wind-skew,4px)),280px,0) rotate(4deg) }
 }
 /* near layer — larger, faster, subtle */
 .rain-near {
@@ -896,7 +961,7 @@ class NimbusWeatherCard extends HTMLElement {
 }
 @keyframes rfal-near {
   0%   { transform:translate3d(0,0,0) rotate(5deg) }
-  100% { transform:translate3d(-6px,280px,0) rotate(5deg) }
+  100% { transform:translate3d(calc(-6px + var(--wind-skew,6px)),280px,0) rotate(5deg) }
 }
 
 /* ── SCREEN DROPLETS ── */
@@ -955,9 +1020,9 @@ class NimbusWeatherCard extends HTMLElement {
 @keyframes twkl { 0%,100% { opacity:0.2 } 50% { opacity:1 } }
 
 /* ── MOON ── */
-.moon-group { position:absolute; top:8px; right:8px; pointer-events:none; animation:moonDrift 18s ease-in-out infinite; }
+.moon-group { position:absolute; top:8px; right:8px; pointer-events:none; z-index:3; animation:moonDrift 18s ease-in-out infinite; }
 @keyframes moonDrift { 0%,100%{transform:translate3d(2px,-1px,0)} 50%{transform:translate3d(-2px,1px,0)} }
-.moon-body { position:absolute; top:0; right:0; width:64px; height:64px; animation:moonPulse 8s ease-in-out infinite; }
+.moon-body { position:absolute; top:0; right:0; width:64px; height:64px; z-index:3; animation:moonPulse 8s ease-in-out infinite; }
 @keyframes moonPulse { 0%,100%{opacity:0.9;transform:scale(1)} 50%{opacity:1;transform:scale(1.03)} }
 .moon-haze { position:absolute; top:-16px; right:-16px; width:96px; height:96px; border-radius:50%;
   background:radial-gradient(circle, rgba(255,252,200,0.14) 0%, rgba(200,220,255,0.06) 45%, transparent 70%);
@@ -1083,12 +1148,15 @@ class NimbusWeatherCard extends HTMLElement {
 .loc  { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; opacity:.85 }
 .cnd  { font-size:11px; opacity:.7; text-transform:capitalize }
 .tmp  { font-size:62px; font-weight:200; letter-spacing:-2px; line-height:1; margin-bottom:2px }
-.hl   { font-size:13px; opacity:.75; font-weight:500; margin-bottom:2px }
-.high { color:#ff9f7c }
-.low  { color:#7cb9ff }
+.hl   { font-size:13px; opacity:.75; font-weight:500; margin-bottom:2px; text-shadow:0 1px 4px rgba(0,0,0,0.45) }
+.high { color:#ff9f7c; text-shadow:0 1px 4px rgba(0,0,0,0.45) }
+.low  { color:#7cb9ff; text-shadow:0 1px 4px rgba(0,0,0,0.45) }
 .cn2  { font-size:18px; font-weight:500; opacity:.9; text-transform:capitalize; margin-bottom:12px }
 .det-wrap { position:relative; margin-bottom:12px; overflow:visible; }
-.det  { display:flex; gap:12px; padding:10px 12px; background:rgba(0,20,60,0.22); backdrop-filter:blur(25px) saturate(200%) brightness(0.9); -webkit-backdrop-filter:blur(25px) saturate(200%) brightness(0.9); border-radius:14px; margin-bottom:0; flex-wrap:wrap; border:1px solid rgba(255,255,255,0.18); box-shadow:0 2px 8px rgba(0,0,0,0.10) }
+.det-clock { display:flex; justify-content:space-between; padding-bottom:5px; font-size:12px; opacity:.9; letter-spacing:.02em; border-bottom:1px solid rgba(255,255,255,0.12); margin-bottom:4px; }
+.det-clock-only { border-bottom:none; padding-bottom:0; margin-bottom:0; }
+.det  { display:flex; flex-direction:column; gap:0; padding:8px 12px; background:rgba(0,20,60,0.22); backdrop-filter:blur(25px) saturate(200%) brightness(0.9); -webkit-backdrop-filter:blur(25px) saturate(200%) brightness(0.9); border-radius:14px; margin-bottom:0; border:1px solid rgba(255,255,255,0.18); box-shadow:0 2px 8px rgba(0,0,0,0.10) }
+.det-row-main { display:flex; gap:12px; flex-wrap:wrap; padding:2px 0; }
 
 /* ── SPLASH LAYER ── */
 .splash-layer { position:absolute; top:-22px; left:0; right:0; height:26px; pointer-events:none; overflow:visible; z-index:10; }
@@ -1205,9 +1273,25 @@ class NimbusWeatherCard extends HTMLElement {
 
   _t(v) {
     if (v === undefined || v === null) return '--';
-    if (this._config?.temperature_unit === 'F' && typeof v === 'number') {
-      v = Math.round(v * 9/5 + 32);
+    if (typeof v !== 'number') return v;
+
+    // Διαβάζουμε την πραγματική μονάδα του entity
+    const entityAttrs = this._hass?.states[this._config?.entity]?.attributes;
+    const rawUnit = entityAttrs?.temperature_unit || '°C';
+    const entityIsF = rawUnit === '°F' || rawUnit === 'F';
+
+    // Επιθυμητή μονάδα εμφάνισης από config
+    const displayF = this._config?.temperature_unit === 'F';
+
+    if (!entityIsF && displayF) {
+      // Entity σε C, θέλουμε F → μετατροπή C→F
+      v = v * 9/5 + 32;
+    } else if (entityIsF && !displayF) {
+      // Entity σε F, θέλουμε C → μετατροπή F→C
+      v = (v - 32) * 5/9;
     }
+    // Σε κάθε άλλη περίπτωση (C→C ή F→F) → καμία μετατροπή
+
     return Math.round(v);
   }
 
@@ -1232,7 +1316,7 @@ class NimbusWeatherCard extends HTMLElement {
 
     const cond    = stateObj.state;
     const attrs   = stateObj.attributes;
-    const isNight = this._isNight();
+    const isNight = this._isNight(cond);
     const bgCls   = this._bgClass(cond, isNight);
     const moonPhase = this._moonPhase();
     const forecast = this._forecast.length ? this._forecast : (attrs.forecast || []);
@@ -1260,13 +1344,16 @@ class NimbusWeatherCard extends HTMLElement {
         <div class="tmp">${this._t(attrs.temperature)}°</div>
         <div class="hl"><span class="high">↑${this._t(items[0]?.temperature ?? attrs.temperature)}°</span>  <span class="low">↓${this._t(items[0]?.templow ?? attrs.temperature)}°</span></div>
         <div class="cn2">${COND_LABELS[cond] || cond.replace(/-/g,' ')}</div>
-        ${this._config.show_details ? `
+        ${(this._config.show_details || this._config.show_clock) ? `
         <div class="det-wrap">
           <div class="det" id="det">
-            <div class="di"><div class="dic">${MDI.humidity}</div>${this._t(attrs.humidity)}%</div>
-            <div class="di"><div class="dic">${MDI.wind}</div>${this._windSpeed(attrs)}</div>
-            <div class="di"><div class="dic">${MDI.pressure}</div>${this._t(attrs.pressure)} hPa</div>
-            ${(attrs.feels_like !== undefined || attrs.apparent_temperature !== undefined) ? `<div class="di"><div class="dic">${MDI.thermometer}</div>Feels ${this._t(attrs.feels_like ?? attrs.apparent_temperature)}°</div>` : ''}
+            ${this._config.show_clock ? `<div class="det-clock${this._config.show_details ? '' : ' det-clock-only'}" id="det-clock"><span class="det-clock-date"></span><span class="det-clock-time"></span></div>` : ''}
+            ${this._config.show_details ? `<div class="det-row-main">
+              <div class="di"><div class="dic">${MDI.humidity}</div>${this._t(attrs.humidity)}%</div>
+              <div class="di"><div class="dic">${MDI.wind}</div>${this._windSpeed(attrs)}</div>
+              <div class="di"><div class="dic">${MDI.pressure}</div>${this._t(attrs.pressure)} hPa</div>
+              ${(attrs.feels_like !== undefined || attrs.apparent_temperature !== undefined) ? `<div class="di"><div class="dic">${MDI.thermometer}</div>Feels ${this._t(attrs.feels_like ?? attrs.apparent_temperature)}°</div>` : ''}
+            </div>` : ''}
           </div>
           <div class="splash-layer" id="splash-layer"></div>
         </div>` : ''}
@@ -1297,14 +1384,29 @@ class NimbusWeatherCard extends HTMLElement {
         </div>` : ''}
       `;
     }
-    this._injectParticlesAsync(cond, isNight, moonPhase);
+    this._injectParticlesAsync(cond, isNight, moonPhase, attrs);
     this._initDetSplash(cond);
+    this._tickClock();
     // UFO easter egg — only for clear-night
     if (this._config.ufo_easter_egg && cond === 'clear-night' && isNight) {
       this._initUfo();
     } else {
       this._destroyUfo();
     }
+  }
+
+  _tickClock() {
+    if (!this._config?.show_clock) return;
+    const el = this.shadowRoot?.getElementById('det-clock');
+    if (!el) return;
+    const now = new Date();
+    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const dateStr = `${days[now.getDay()]} ${now.getDate()} ${months[now.getMonth()]}`;
+    const h = String(now.getHours()).padStart(2,'0');
+    const m = String(now.getMinutes()).padStart(2,'0');
+    el.querySelector('.det-clock-date').textContent = dateStr;
+    el.querySelector('.det-clock-time').textContent = h + ':' + m;
   }
 
   _initDetSplash(condition) {
@@ -1420,9 +1522,9 @@ class NimbusWeatherCard extends HTMLElement {
         if(!this._ufoActive)return;
         const t=Math.min((Date.now()-start)/dur,1);
         onFrame(t);
-        if(t<1)requestAnimationFrame(frame);else onDone&&onDone();
+        if(t<1){ this._rafId=requestAnimationFrame(frame); }else{ this._rafId=null; onDone&&onDone(); }
       };
-      requestAnimationFrame(frame);
+      this._rafId=requestAnimationFrame(frame);
     };
 
     const drawBeam=(ufoTopPx,alpha)=>{
@@ -1598,6 +1700,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
   <div class="row">
     <div><div class="label">Weather Entity</div></div>
     <select id="entity">
+      ${!c.entity ? `<option value="">— select entity —</option>` : ''}
       ${weatherEntities.map(e => `<option value="${e}" ${c.entity===e?'selected':''}>${e}</option>`).join('')}
     </select>
   </div>
@@ -1611,7 +1714,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
     <input type="text" id="name" value="${c.name||''}" placeholder="e.g. Athens">
   </div>
   <div class="row">
-    <div><div class="label">Temperature Unit</div></div>
+    <div><div class="label">Display Unit</div><div class="sublabel">Card converts automatically from entity unit</div></div>
     <select id="temperature_unit">
       <option value="C" ${this._val('temperature_unit','C')==='C'?'selected':''}>°C</option>
       <option value="F" ${this._val('temperature_unit','C')==='F'?'selected':''}>°F</option>
@@ -1646,6 +1749,17 @@ class NimbusWeatherCardEditor extends HTMLElement {
   <div class="row">
     <div><div class="label">Show Details</div><div class="sublabel">Humidity, wind, pressure</div></div>
     ${this._toggle('show_details', this._val('show_details', true))}
+  </div>
+  <div class="row">
+    <div><div class="label">Show Clock</div><div class="sublabel">Date &amp; time inside details</div></div>
+    ${this._toggle('show_clock', this._val('show_clock', false))}
+  </div>
+  <div class="row">
+    <div><div class="label">Wind Speed Unit</div><div class="sublabel">km/h or Beaufort scale</div></div>
+    <select id="wind_unit" style="background:rgba(255,255,255,0.1);color:white;border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:4px 8px">
+      <option value="kmh" ${this._val('wind_unit','kmh')==='kmh'?'selected':''}>km/h</option>
+      <option value="beaufort" ${this._val('wind_unit','kmh')==='beaufort'?'selected':''}>Beaufort</option>
+    </select>
   </div>
   <div class="row">
     <div><div class="label">Show Feels Like</div></div>
@@ -1685,7 +1799,19 @@ class NimbusWeatherCardEditor extends HTMLElement {
       <button class="remove-sensor" data-idx="${i}" style="background:none;border:none;cursor:pointer;color:var(--color-text-secondary);font-size:16px;padding:0 4px" ${this._val('show_forecast',true)?'disabled':''}>✕</button>
     </div>
     <input type="text" list="entities-list" class="sensor-entity" data-idx="${i}" value="${s.entity||''}" placeholder="Search entity..." ${this._val('show_forecast',true)?'disabled':''}>
-    <input type="text" class="sensor-icon" data-idx="${i}" value="${s.icon||''}" placeholder="mdi:thermometer" ${this._val('show_forecast',true)?'disabled':''}>
+    \${customElements.get('ha-icon-picker') !== undefined ? \`
+    <ha-icon-picker
+      class="sensor-icon-picker"
+      data-idx="\${i}"
+      .value="\${s.icon||''}"
+      .label=\${"Icon"}
+      \${this._val('show_forecast',true)?'disabled':''}
+      @value-changed="\${(e)=>{ const ip=this.shadowRoot.querySelector(\`.sensor-icon[data-idx='\${i}']\`); if(ip) ip.value=e.detail.value; }}"
+    ></ha-icon-picker>
+    <input type="hidden" class="sensor-icon" data-idx="\${i}" value="\${s.icon||''}">
+    \` : \`
+    <input type="text" class="sensor-icon" data-idx="\${i}" value="\${s.icon||''}" placeholder="mdi:thermometer" \${this._val('show_forecast',true)?'disabled':''}>
+    \`}
     <input type="text" class="sensor-name" data-idx="${i}" value="${s.name||''}" placeholder="Label (optional)" ${this._val('show_forecast',true)?'disabled':''}>
   </div>`).join('')}
   ${(c.local_sensors||[]).length < 4 ? `
@@ -1736,10 +1862,17 @@ class NimbusWeatherCardEditor extends HTMLElement {
       return sensors;
     };
 
+    // Helper: διαβάζει checked από ha-switch ή checkbox
+    const getChecked = (id, def=true) => {
+      const el = sr.getElementById(id);
+      if (!el) return def;
+      return el.checked ?? def;
+    };
+
     const upd = () => {
-      const entity = sr.getElementById('entity')?.value || this._config.entity;
+      const entity = (sr.getElementById('entity')?.value?.trim()) || this._config.entity;
       if (!entity) return;
-      const showForecast = sr.getElementById('show_forecast')?.checked ?? true;
+      const showForecast = getChecked('show_forecast', true);
       // Start from existing config to preserve unknown fields like grid_options
       const cfg = {
         ...this._config,
@@ -1748,12 +1881,14 @@ class NimbusWeatherCardEditor extends HTMLElement {
         forecast_type: sr.getElementById('forecast_type')?.value || 'daily',
         max_items: parseInt(sr.getElementById('max_items')?.value) || 5,
         show_forecast: showForecast,
-        show_details: sr.getElementById('show_details')?.checked ?? true,
-        show_feels_like: sr.getElementById('show_feels_like')?.checked ?? true,
+        show_details: getChecked('show_details', true),
+        show_feels_like: getChecked('show_feels_like', true),
         temperature_unit: sr.getElementById('temperature_unit')?.value || 'C',
-        use_24h: sr.getElementById('use_24h')?.checked ?? true,
+        use_24h: getChecked('use_24h', true),
         animation_speed: parseFloat(sr.getElementById('animation_speed')?.value ?? 0),
-        ufo_easter_egg: sr.getElementById('ufo_easter_egg')?.checked ?? true,
+        wind_unit: sr.getElementById('wind_unit')?.value || 'kmh',
+        show_clock: getChecked('show_clock', false),
+        ufo_easter_egg: getChecked('ufo_easter_egg', true),
         local_sensors: getSensors(),
       };
       const name = sr.getElementById('name')?.value?.trim();
