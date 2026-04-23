@@ -1,4 +1,6 @@
-
+// Nimbus Weather Card v1.8.1
+// https://github.com/maxfok/nimbus-weather-card
+// (c) 2024 Gerasimos Fokianos — MIT License
 
 const MDI = {
   sunny: `<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -301,6 +303,7 @@ class NimbusWeatherCard extends HTMLElement {
     this._timeInterval = null;
     this._particleFadeTimer = null;
     this._splashIntervals = [];
+    this._recentRainCache = { value: false, lastUpdate: 0 };
     this._iconCache = new Map();
     this._renderDebounced = this._debounce(this._render.bind(this), 100);
   }
@@ -331,7 +334,7 @@ class NimbusWeatherCard extends HTMLElement {
     if (!config.entity) throw new Error('Please define a weather entity');
     this._config = {
       entity: config.entity,
-      forecast_type: config.forest_type || config.forecast_type || 'daily',
+      forecast_type: config.forecast_type || 'daily',
       max_items: config.max_items || 5,
       show_forecast: config.show_forecast !== false,
       show_details: config.show_details !== false,
@@ -368,9 +371,9 @@ class NimbusWeatherCard extends HTMLElement {
       return `${bft} Bft`;
     }
 
-    if (unit === 'mph') return `${this._t(speed)} mph`;
+    if (unit === 'mph') return `${this._fmt(speed)} mph`;
     if (unit === 'm/s')  return `${kmh.toFixed(1)} km/h`;
-    return `${this._t(speed)} ${unit}`;
+    return `${this._fmt(speed)} ${unit}`;
   }
 
   // Επιστρέφει την κλίση (skew σε px/280px) βάσει wind_bearing & wind_speed
@@ -444,19 +447,21 @@ class NimbusWeatherCard extends HTMLElement {
     // Calculate moon phase from date when no sensor
     const date = new Date();
     const year = date.getFullYear(), month = date.getMonth() + 1, day = date.getDate();
-    const adjYear = month <= 2 ? year - 1 : year;
-    const c = Math.floor((adjYear - 1900) * 365.25);
-    const e = Math.floor(30.6 * (month > 2 ? month - 2 : month + 10));
-    const jd = c + e + day - 694039.09;
-    const phase = ((jd / 29.5305882) % 1 + 1) % 1;
-    if (phase < 0.033) return 'new_moon';
-    if (phase < 0.216) return 'waxing_crescent';
-    if (phase < 0.283) return 'first_quarter';
-    if (phase < 0.466) return 'waxing_gibbous';
-    if (phase < 0.533) return 'full_moon';
-    if (phase < 0.716) return 'waning_gibbous';
-    if (phase < 0.783) return 'last_quarter';
-    if (phase < 0.966) return 'waning_crescent';
+    let y = year, m = month;
+    if (m < 3) { y--; m += 12; }
+    const a = Math.floor(y / 100);
+    const b = 2 - a + Math.floor(a / 4);
+    const jd = Math.floor(365.25 * (y + 4716)) + Math.floor(30.6001 * (m + 1)) + day + b - 1524.5;
+    const phase = ((jd - 2451550.1) / 29.530588853) % 1;
+    const p = phase < 0 ? phase + 1 : phase;
+    if (p < 0.033) return 'new_moon';
+    if (p < 0.216) return 'waxing_crescent';
+    if (p < 0.283) return 'first_quarter';
+    if (p < 0.466) return 'waxing_gibbous';
+    if (p < 0.533) return 'full_moon';
+    if (p < 0.716) return 'waning_gibbous';
+    if (p < 0.783) return 'last_quarter';
+    if (p < 0.966) return 'waning_crescent';
     return 'new_moon';
   }
 
@@ -541,7 +546,9 @@ class NimbusWeatherCard extends HTMLElement {
         `history/period/${from}?filter_entity_id=${this._config.entity}&minimal_response=true&no_attributes=true`);
       if (!history || !history[0]) return false;
       const rainConditions = ['rainy','pouring','lightning','lightning-rainy','snowy-rainy'];
-      return history[0].some(s => rainConditions.includes(s.state));
+      const value = history[0].some(s => rainConditions.includes(s.state));
+      this._recentRainCache = { value, lastUpdate: now };
+      return value;
     } catch(e) { return false; }
   }
 
@@ -837,7 +844,7 @@ class NimbusWeatherCard extends HTMLElement {
           const bolt = document.createElement('div');
           bolt.className = 'lx-bolt';
           bolt.style.left = leftPos + '%';
-          const filterId = 'bg' + Math.random().toString(36).substr(2,5);
+          const filterId = 'bg' + Math.random().toString(36).substring(2,7);
           bolt.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:100%">
             <defs><filter id="${filterId}"><feGaussianBlur stdDeviation="3" result="b"/>
             <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
@@ -1018,7 +1025,7 @@ class NimbusWeatherCard extends HTMLElement {
 
   _subscribeForecast(entityId) {
     if (this._forecastUnsub) { this._forecastUnsub(); this._forecastUnsub = null; }
-    if (!this._hass) return;
+    if (!this._hass?.connection) return;
     this._hass.connection.subscribeMessage(
       msg => { this._forecast = msg.forecast || []; this._renderContent(); },
       { type: 'weather/subscribe_forecast', forecast_type: this._config.forecast_type, entity_id: entityId }
@@ -1266,9 +1273,6 @@ class NimbusWeatherCard extends HTMLElement {
 @keyframes mD1 { 0%,100%{transform:translate3d(0,0,0)} 50%{transform:translate3d(30px,8px,0)} }
 @keyframes mD2 { 0%,100%{transform:translate3d(0,0,0)} 50%{transform:translate3d(-25px,-6px,0)} }
 @keyframes mD3 { 0%,100%{transform:translate3d(0,0,0)} 50%{transform:translate3d(20px,10px,0)} }
-@keyframes mD1 { 0%,100%{transform:translate3d(0,0,0)} 50%{transform:translate3d(30px,5px,0)} }
-@keyframes mD2 { 0%,100%{transform:translate3d(0,0,0)} 50%{transform:translate3d(-25px,-8px,0)} }
-@keyframes mD3 { 0%,100%{transform:translate3d(0,0,0)} 50%{transform:translate3d(20px,10px,0)} }
 
 /* ── WIND STREAKS ── */
 .wind-streak {
@@ -1426,27 +1430,32 @@ class NimbusWeatherCard extends HTMLElement {
     });
   }
 
+  // Μόνο για θερμοκρασίες — κάνει μετατροπή C↔F αν χρειάζεται
   _t(v) {
     if (v === undefined || v === null) return '--';
     if (typeof v !== 'number') return v;
 
-    // Διαβάζουμε την πραγματική μονάδα του entity
     const entityAttrs = this._hass?.states[this._config?.entity]?.attributes;
     const rawUnit = entityAttrs?.temperature_unit || '°C';
-    const entityIsF = rawUnit === '°F' || rawUnit === 'F';
-
-    // Επιθυμητή μονάδα εμφάνισης από config
+    const entityIsF = rawUnit === '°F' || rawUnit === 'F' || rawUnit === 'fahrenheit';
     const displayF = this._config?.temperature_unit === 'F';
 
-    if (!entityIsF && displayF) {
-      // Entity σε C, θέλουμε F → μετατροπή C→F
-      v = v * 9/5 + 32;
-    } else if (entityIsF && !displayF) {
-      // Entity σε F, θέλουμε C → μετατροπή F→C
-      v = (v - 32) * 5/9;
-    }
-    // Σε κάθε άλλη περίπτωση (C→C ή F→F) → καμία μετατροπή
+    if (!entityIsF && displayF) v = v * 9/5 + 32;
+    else if (entityIsF && !displayF) v = (v - 32) * 5/9;
 
+    return Math.round(v);
+  }
+
+  _escapeHtml(unsafe) {
+    return String(unsafe).replace(/[&<>"]/g, c =>
+      ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c])
+    );
+  }
+
+  // Για μη-θερμοκρασίες (υγρασία, πίεση, κλπ) — μόνο στρογγυλοποίηση
+  _fmt(v) {
+    if (v === undefined || v === null) return '--';
+    if (typeof v !== 'number') return v;
     return Math.round(v);
   }
 
@@ -1522,9 +1531,9 @@ class NimbusWeatherCard extends HTMLElement {
           <div class="det" id="det">
             ${this._config.show_clock ? `<div class="det-clock${this._config.show_details ? '' : ' det-clock-only'}" id="det-clock"><span class="det-clock-date"></span><span class="det-clock-time"></span></div>` : ''}
             ${this._config.show_details ? `<div class="det-row-main">
-              <div class="di"><div class="dic">${MDI.humidity}</div>${this._t(attrs.humidity)}%</div>
+              <div class="di"><div class="dic">${MDI.humidity}</div>${this._fmt(attrs.humidity)}%</div>
               <div class="di"><div class="dic">${MDI.wind}</div>${this._windSpeed(attrs)}</div>
-              <div class="di"><div class="dic">${MDI.pressure}</div>${this._t(attrs.pressure)} hPa</div>
+              <div class="di"><div class="dic">${MDI.pressure}</div>${this._fmt(attrs.pressure)} hPa</div>
               ${(attrs.feels_like !== undefined || attrs.apparent_temperature !== undefined) ? `<div class="di"><div class="dic">${MDI.thermometer}</div>Feels ${this._t(attrs.feels_like ?? attrs.apparent_temperature)}°</div>` : ''}
             </div>` : ''}
           </div>
@@ -1802,6 +1811,12 @@ class NimbusWeatherCardEditor extends HTMLElement {
     super();
     this.attachShadow({ mode: 'open' });
     this._config = {};
+    this._abortController = null;
+  }
+
+  disconnectedCallback() {
+    this._abortController?.abort();
+    this._abortController = null;
   }
 
   setConfig(config) {
@@ -2033,6 +2048,10 @@ class NimbusWeatherCardEditor extends HTMLElement {
   }
 
   _attach() {
+    // Ακύρωση τυχόν παλαιών listeners πριν προσθέσουμε νέους
+    this._abortController?.abort();
+    this._abortController = new AbortController();
+    const signal = this._abortController.signal;
     const sr = this.shadowRoot;
 
     const getSensors = () => {
@@ -2087,10 +2106,9 @@ class NimbusWeatherCardEditor extends HTMLElement {
     };
 
     sr.querySelectorAll('select, input[type="text"], input[type="checkbox"], input[type="range"]').forEach(el => {
-      el.addEventListener('change', upd);
-      if (el.type === 'range') el.addEventListener('input', upd);
+      el.addEventListener('change', upd, { signal });
+      if (el.type === 'range') el.addEventListener('input', upd, { signal });
     });
-
 
     // Add sensor button
     sr.getElementById('add-sensor')?.addEventListener('click', () => {
