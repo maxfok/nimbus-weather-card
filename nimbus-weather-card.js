@@ -1,6 +1,4 @@
-// Nimbus Weather Card v1.8.1
-// https://github.com/maxfok/nimbus-weather-card
-// (c) 2024 Gerasimos Fokianos — MIT License
+
 
 const MDI = {
   sunny: `<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -303,7 +301,6 @@ class NimbusWeatherCard extends HTMLElement {
     this._timeInterval = null;
     this._particleFadeTimer = null;
     this._splashIntervals = [];
-    this._recentRainCache = { value: false, lastUpdate: 0 };
     this._iconCache = new Map();
     this._renderDebounced = this._debounce(this._render.bind(this), 100);
   }
@@ -447,21 +444,19 @@ class NimbusWeatherCard extends HTMLElement {
     // Calculate moon phase from date when no sensor
     const date = new Date();
     const year = date.getFullYear(), month = date.getMonth() + 1, day = date.getDate();
-    let y = year, m = month;
-    if (m < 3) { y--; m += 12; }
-    const a = Math.floor(y / 100);
-    const b = 2 - a + Math.floor(a / 4);
-    const jd = Math.floor(365.25 * (y + 4716)) + Math.floor(30.6001 * (m + 1)) + day + b - 1524.5;
-    const phase = ((jd - 2451550.1) / 29.530588853) % 1;
-    const p = phase < 0 ? phase + 1 : phase;
-    if (p < 0.033) return 'new_moon';
-    if (p < 0.216) return 'waxing_crescent';
-    if (p < 0.283) return 'first_quarter';
-    if (p < 0.466) return 'waxing_gibbous';
-    if (p < 0.533) return 'full_moon';
-    if (p < 0.716) return 'waning_gibbous';
-    if (p < 0.783) return 'last_quarter';
-    if (p < 0.966) return 'waning_crescent';
+    const adjYear = month <= 2 ? year - 1 : year;
+    const c = Math.floor((adjYear - 1900) * 365.25);
+    const e = Math.floor(30.6 * (month > 2 ? month - 2 : month + 10));
+    const jd = c + e + day - 694039.09;
+    const phase = ((jd / 29.5305882) % 1 + 1) % 1;
+    if (phase < 0.033) return 'new_moon';
+    if (phase < 0.216) return 'waxing_crescent';
+    if (phase < 0.283) return 'first_quarter';
+    if (phase < 0.466) return 'waxing_gibbous';
+    if (phase < 0.533) return 'full_moon';
+    if (phase < 0.716) return 'waning_gibbous';
+    if (phase < 0.783) return 'last_quarter';
+    if (phase < 0.966) return 'waning_crescent';
     return 'new_moon';
   }
 
@@ -546,9 +541,7 @@ class NimbusWeatherCard extends HTMLElement {
         `history/period/${from}?filter_entity_id=${this._config.entity}&minimal_response=true&no_attributes=true`);
       if (!history || !history[0]) return false;
       const rainConditions = ['rainy','pouring','lightning','lightning-rainy','snowy-rainy'];
-      const value = history[0].some(s => rainConditions.includes(s.state));
-      this._recentRainCache = { value, lastUpdate: now };
-      return value;
+      return history[0].some(s => rainConditions.includes(s.state));
     } catch(e) { return false; }
   }
 
@@ -844,7 +837,7 @@ class NimbusWeatherCard extends HTMLElement {
           const bolt = document.createElement('div');
           bolt.className = 'lx-bolt';
           bolt.style.left = leftPos + '%';
-          const filterId = 'bg' + Math.random().toString(36).substring(2,7);
+          const filterId = 'bg' + Math.random().toString(36).substr(2,5);
           bolt.innerHTML = `<svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:100%">
             <defs><filter id="${filterId}"><feGaussianBlur stdDeviation="3" result="b"/>
             <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
@@ -1444,12 +1437,6 @@ class NimbusWeatherCard extends HTMLElement {
     else if (entityIsF && !displayF) v = (v - 32) * 5/9;
 
     return Math.round(v);
-  }
-
-  _escapeHtml(unsafe) {
-    return String(unsafe).replace(/[&<>"]/g, c =>
-      ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c])
-    );
   }
 
   // Για μη-θερμοκρασίες (υγρασία, πίεση, κλπ) — μόνο στρογγυλοποίηση
