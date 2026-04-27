@@ -1,4 +1,4 @@
-// Nimbus Weather Card v2.0.0
+// Nimbus Weather Card v2.0.1
 // https://github.com/maxfok/nimbus-weather-card
 // (c) 2024 Gerasimos Fokaefs — MIT License
 
@@ -352,6 +352,7 @@ class NimbusWeatherCard extends HTMLElement {
       use_24h: config.use_24h !== false,
       show_feels_like: config.show_feels_like !== false,
       animation_speed: config.animation_speed ?? 0,
+      language: config.language || 'en',
       wind_unit: config.wind_unit || 'kmh',
       show_clock: config.show_clock || false,
       local_sensors: config.local_sensors || [],
@@ -491,6 +492,17 @@ class NimbusWeatherCard extends HTMLElement {
     if (unit === 'mph')  return parseFloat(speed) * 0.447;
     if (unit === 'kn')   return parseFloat(speed) * 0.514;
     return parseFloat(speed) / 3.6;
+  }
+
+  _condLabel(condition) {
+    const lang = this._config?.language || 'en';
+    const i = {'en':0,'es':1,'de':2}[lang] || 0;
+    const C = [
+      {'sunny':'Sunny','clear-night':'Clear Night','partlycloudy':'Partly Cloudy','cloudy':'Cloudy','fog':'Fog','rainy':'Rainy','pouring':'Pouring','lightning':'Lightning','lightning-rainy':'Thunder & Rain','snowy':'Snowy','snowy-rainy':'Sleet','hail':'Hail','windy':'Windy','windy-variant':'Windy','exceptional':'Exceptional','overcast':'Overcast'},
+      {'sunny':'Soleado','clear-night':'Noche Despejada','partlycloudy':'Parcialmente Nublado','cloudy':'Nublado','fog':'Niebla','rainy':'Lluvioso','pouring':'Lluvia Intensa','lightning':'Tormenta','lightning-rainy':'Tormenta con Lluvia','snowy':'Nevado','snowy-rainy':'Aguanieve','hail':'Granizo','windy':'Ventoso','windy-variant':'Ventoso','exceptional':'Excepcional','overcast':'Cubierto'},
+      {'sunny':'Sonnig','clear-night':'Klare Nacht','partlycloudy':'Bewölkt','cloudy':'Bewölkt','fog':'Nebel','rainy':'Regnerisch','pouring':'Starkregen','lightning':'Gewitter','lightning-rainy':'Gewitter mit Regen','snowy':'Schneefall','snowy-rainy':'Schneeregen','hail':'Hagel','windy':'Windig','windy-variant':'Windig','exceptional':'Aussergewoehnlich','overcast':'Bedeckt'},
+    ];
+    return C[i]?.[condition] || COND_LABELS[condition] || condition;
   }
 
   _isForecastNight(f) {
@@ -2227,7 +2239,9 @@ class NimbusWeatherCard extends HTMLElement {
         return (h % 12 || 12) + (h < 12 ? 'am' : 'pm');
       }
     }
-    return d.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase();
+    const locMap = {'en':'en-US','es':'es-ES','de':'de-DE'};
+    const loc = locMap[this._config?.language||'en'] || 'en-US';
+    return d.toLocaleDateString(loc, { weekday: 'short' }).toUpperCase();
   }
 
   _renderContent() {
@@ -2264,7 +2278,7 @@ class NimbusWeatherCard extends HTMLElement {
         </div>
         <div class="tmp">${this._t(attrs.temperature)}°</div>
         <div class="hl"><span class="high">↑${this._t(items[0]?.temperature ?? attrs.temperature)}°</span>  <span class="low">↓${this._t(items[0]?.templow ?? attrs.temperature)}°</span></div>
-        <div class="cn2">${COND_LABELS[cond] || cond.replace(/-/g,' ')}</div>
+        <div class="cn2">${this._condLabel(cond)}</div>
         ${(this._config.show_details || this._config.show_clock) ? `
         <div class="det-wrap">
           <div class="det" id="det">
@@ -2323,9 +2337,9 @@ class NimbusWeatherCard extends HTMLElement {
     const el = this.shadowRoot?.getElementById('det-clock');
     if (!el) return;
     const now = new Date();
-    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    const dateStr = `${days[now.getDay()]} ${now.getDate()} ${months[now.getMonth()]}`;
+    const locMap = {'en':'en-US','es':'es-ES','de':'de-DE'};
+    const loc = locMap[this._config?.language||'en'] || 'en-US';
+    const dateStr = now.toLocaleDateString(loc, { weekday:'short', day:'numeric', month:'short' });
     const h = String(now.getHours()).padStart(2,'0');
     const m = String(now.getMinutes()).padStart(2,'0');
     el.querySelector('.det-clock-date').textContent = dateStr;
@@ -2683,6 +2697,13 @@ class NimbusWeatherCardEditor extends HTMLElement {
     </select>
   </div>
   <div class="row">
+    <div><div class="label">Language</div><div class="sublabel">Card display language</div></div>
+    <select id="language" style="width:100%;padding:6px;border-radius:8px;border:1px solid var(--color-border-secondary);background:var(--color-background-secondary);color:var(--color-text-primary);font-size:14px">
+      <option value="en" ${this._val('language','en')==='en'?'selected':''}>English</option>
+      <option value="es" ${this._val('language','en')==='es'?'selected':''}>Espanol</option>
+      <option value="de" ${this._val('language','en')==='de'?'selected':''}>Deutsch</option>
+    </select>
+
     <div><div class="label">Show Forecast Strip</div></div>
     ${this._toggle('show_forecast', this._val('show_forecast', true))}
   </div>
@@ -2824,6 +2845,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
         entity,
         forecast_type: sr.getElementById('forecast_type')?.value || 'daily',
         max_items: parseInt(sr.getElementById('max_items')?.value) || 5,
+        language: this.shadowRoot.getElementById('language')?.value || 'en',
         show_forecast: showForecast,
         show_details: getChecked('show_details', true),
         show_feels_like: getChecked('show_feels_like', true),
