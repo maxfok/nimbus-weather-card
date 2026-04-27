@@ -1,6 +1,5 @@
 {
   "name": "Nimbus Weather Card",
-  "type": "js",
   "render_readme": true,
   "filename": "nimbus-weather-card.js"
 }
