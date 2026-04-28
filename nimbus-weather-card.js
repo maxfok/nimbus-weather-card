@@ -496,11 +496,12 @@ class NimbusWeatherCard extends HTMLElement {
 
   _condLabel(condition) {
     const lang = this._config?.language || 'en';
-    const i = {'en':0,'es':1,'de':2}[lang] || 0;
+    const i = {'en':0,'es':1,'de':2,'nl':3}[lang] || 0;
     const C = [
       {'sunny':'Sunny','clear-night':'Clear Night','partlycloudy':'Partly Cloudy','cloudy':'Cloudy','fog':'Fog','rainy':'Rainy','pouring':'Pouring','lightning':'Lightning','lightning-rainy':'Thunder & Rain','snowy':'Snowy','snowy-rainy':'Sleet','hail':'Hail','windy':'Windy','windy-variant':'Windy','exceptional':'Exceptional','overcast':'Overcast'},
       {'sunny':'Soleado','clear-night':'Noche Despejada','partlycloudy':'Parcialmente Nublado','cloudy':'Nublado','fog':'Niebla','rainy':'Lluvioso','pouring':'Lluvia Intensa','lightning':'Tormenta','lightning-rainy':'Tormenta con Lluvia','snowy':'Nevado','snowy-rainy':'Aguanieve','hail':'Granizo','windy':'Ventoso','windy-variant':'Ventoso','exceptional':'Excepcional','overcast':'Cubierto'},
       {'sunny':'Sonnig','clear-night':'Klare Nacht','partlycloudy':'Bewölkt','cloudy':'Bewölkt','fog':'Nebel','rainy':'Regnerisch','pouring':'Starkregen','lightning':'Gewitter','lightning-rainy':'Gewitter mit Regen','snowy':'Schneefall','snowy-rainy':'Schneeregen','hail':'Hagel','windy':'Windig','windy-variant':'Windig','exceptional':'Aussergewoehnlich','overcast':'Bedeckt'},
+      {'sunny':'Zonnig','clear-night':'Heldere nacht','partlycloudy':'Licht bewolkt','cloudy':'Bewolkt','fog':'Mist','rainy':'Regenachtig','pouring':'Regenbui','lightning':'Onweer','lightning-rainy':'Regen en onweer','snowy':'Sneeuw','snowy-rainy':'Natte sneeuw','hail':'Hagel','windy':'Winderig','windy-variant':'Winderig','exceptional':'Buitengewoon','overcast':'Bewolkt'},
     ];
     return C[i]?.[condition] || COND_LABELS[condition] || condition;
   }
