@@ -5,6 +5,12 @@ After months of work, I'm excited to share the biggest update yet to Nimbus Weat
 🔗 **GitHub**: https://github.com/maxfok/nimbus-weather-card
 📦 **HACS**: Search "Nimbus Weather Card"
 
+
+<img width="400" height="300" alt="Screen Recording 2026-04-27 at 9 00 36 PM" src="https://github.com/user-attachments/assets/acd6acd2-8197-4998-8a7d-efce0650bee1" />
+<img width="400" height="300" alt="Screen Recording 2026-04-28 at 6 21 34 AM" src="https://github.com/user-attachments/assets/e6f6c426-ac05-4425-ab17-1616722bc02b" />
+<img width="400" height="300" alt="Screen Recording 2026-04-28 at 6 23 17 AM" src="https://github.com/user-attachments/assets/ea69970d-cb64-4b28-8f07-7618cdc60d7e" />
+<img width="400" height="300" alt="Screen Recording 2026-04-28 at 6 28 21 AM" src="https://github.com/user-attachments/assets/296d1505-7870-4574-8d75-38a1669f7cd0" />
+
 ---
 
 ## 🌟 What's new in v2.0.0
