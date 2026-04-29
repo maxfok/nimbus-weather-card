@@ -74,7 +74,10 @@ Select the language from the card editor. More languages coming — want to add 
 
 ## 📦 Installation
 
-**Via HACS** (recommended): Search for "Nimbus Weather Card"
+**Via HACS** (recommended):
+1. Go to HACS → Frontend → ⋮ → Custom repositories
+2. Add `https://github.com/maxfok/nimbus-weather-card` as **Lovelace**
+3. Search for "Nimbus Weather Card" and install
 
 **Manual**:
 ```
