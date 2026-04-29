@@ -1,4 +1,4 @@
-// Nimbus Weather Card v2.0.1
+// Nimbus Weather Card v2.1.0
 // https://github.com/maxfok/nimbus-weather-card
 // (c) 2024 Gerasimos Fokaefs — MIT License
 
@@ -357,6 +357,7 @@ class NimbusWeatherCard extends HTMLElement {
       show_clock: config.show_clock || false,
       local_sensors: config.local_sensors || [],
       ufo_easter_egg: config.ufo_easter_egg !== false,
+      latitude_zone: config.latitude_zone || 'northern_temperate',
     };
   }
 
@@ -473,6 +474,52 @@ class NimbusWeatherCard extends HTMLElement {
     return 'new_moon';
   }
 
+
+  // Moon position calculation based on time and latitude
+  _moonPosition() {
+    const now = new Date();
+    const lat = this._config.latitude_zone ? {
+      'arctic': 75, 'northern_temperate': 45,
+      'tropical': 0, 'southern_temperate': -35, 'antarctic': -75
+    }[this._config.latitude_zone] ?? 45 : 45;
+
+    // Days since J2000.0
+    const d = (now - new Date('2000-01-01T12:00:00Z')) / 86400000;
+
+    // Moon mean longitude and anomaly
+    const L = (218.316 + 13.176396 * d) % 360;
+    const M = (134.963 + 13.064993 * d) % 360;
+    const F = (93.272  + 13.229350 * d) % 360;
+
+    const Mrad = M * Math.PI / 180;
+    const Frad = F * Math.PI / 180;
+
+    // Ecliptic longitude
+    const lon = L + 6.289 * Math.sin(Mrad);
+    const lat2 = 5.128 * Math.sin(Frad);
+
+    // Convert to equatorial
+    const lonRad = lon * Math.PI / 180;
+    const latRad = lat2 * Math.PI / 180;
+    const oblRad = 23.439 * Math.PI / 180;
+
+    const ra  = Math.atan2(Math.sin(lonRad) * Math.cos(oblRad) - Math.tan(latRad) * Math.sin(oblRad), Math.cos(lonRad));
+    const dec = Math.asin(Math.sin(latRad) * Math.cos(oblRad) + Math.cos(latRad) * Math.sin(oblRad) * Math.sin(lonRad));
+
+    // Hour angle
+    const lst = (100.46 + 0.985647 * d + 15 * (now.getUTCHours() + now.getUTCMinutes()/60)) * Math.PI / 180;
+    const ha  = lst - ra;
+
+    const latRad2 = lat * Math.PI / 180;
+    const alt = Math.asin(Math.sin(latRad2) * Math.sin(dec) + Math.cos(latRad2) * Math.cos(dec) * Math.cos(ha));
+    const az  = Math.atan2(-Math.cos(dec) * Math.sin(ha), Math.sin(dec) * Math.cos(latRad2) - Math.cos(dec) * Math.cos(ha) * Math.sin(latRad2));
+
+    return {
+      elevation: alt * 180 / Math.PI,
+      azimuth: ((az * 180 / Math.PI) + 360) % 360
+    };
+  }
+
   _sunElevation() {
     if (this._config.sun_entity && this._hass.states[this._config.sun_entity]) {
       const elevation = parseFloat(this._hass.states[this._config.sun_entity].attributes.elevation);
@@ -480,6 +527,15 @@ class NimbusWeatherCard extends HTMLElement {
     }
     const h = new Date().getHours() + new Date().getMinutes() / 60;
     return Math.max(-5, Math.min(90, Math.sin((h - 6) / 12 * Math.PI) * 60 - 5));
+  }
+
+  _sunAzimuth() {
+    if (this._config.sun_entity && this._hass?.states[this._config.sun_entity]) {
+      const az = parseFloat(this._hass.states[this._config.sun_entity].attributes.azimuth);
+      return isNaN(az) ? 180 : az;
+    }
+    const h = new Date().getHours() + new Date().getMinutes() / 60;
+    return Math.max(0, Math.min(360, (h - 6) / 12 * 180 + 90));
   }
 
   // Επιστρέφει wind speed σε m/s (για cloud animation speed)
@@ -496,11 +552,12 @@ class NimbusWeatherCard extends HTMLElement {
 
   _condLabel(condition) {
     const lang = this._config?.language || 'en';
-    const i = {'en':0,'es':1,'de':2}[lang] || 0;
+    const i = {'en':0,'es':1,'de':2,'nl':3}[lang] || 0;
     const C = [
       {'sunny':'Sunny','clear-night':'Clear Night','partlycloudy':'Partly Cloudy','cloudy':'Cloudy','fog':'Fog','rainy':'Rainy','pouring':'Pouring','lightning':'Lightning','lightning-rainy':'Thunder & Rain','snowy':'Snowy','snowy-rainy':'Sleet','hail':'Hail','windy':'Windy','windy-variant':'Windy','exceptional':'Exceptional','overcast':'Overcast'},
       {'sunny':'Soleado','clear-night':'Noche Despejada','partlycloudy':'Parcialmente Nublado','cloudy':'Nublado','fog':'Niebla','rainy':'Lluvioso','pouring':'Lluvia Intensa','lightning':'Tormenta','lightning-rainy':'Tormenta con Lluvia','snowy':'Nevado','snowy-rainy':'Aguanieve','hail':'Granizo','windy':'Ventoso','windy-variant':'Ventoso','exceptional':'Excepcional','overcast':'Cubierto'},
       {'sunny':'Sonnig','clear-night':'Klare Nacht','partlycloudy':'Bewölkt','cloudy':'Bewölkt','fog':'Nebel','rainy':'Regnerisch','pouring':'Starkregen','lightning':'Gewitter','lightning-rainy':'Gewitter mit Regen','snowy':'Schneefall','snowy-rainy':'Schneeregen','hail':'Hagel','windy':'Windig','windy-variant':'Windig','exceptional':'Aussergewoehnlich','overcast':'Bedeckt'},
+      {'sunny':'Zonnig','clear-night':'Heldere nacht','partlycloudy':'Licht bewolkt','cloudy':'Bewolkt','fog':'Mist','rainy':'Regenachtig','pouring':'Regenbui','lightning':'Onweer','lightning-rainy':'Regen en onweer','snowy':'Sneeuw','snowy-rainy':'Natte sneeuw','hail':'Hagel','windy':'Winderig','windy-variant':'Winderig','exceptional':'Buitengewoon','overcast':'Bewolkt'},
     ];
     return C[i]?.[condition] || COND_LABELS[condition] || condition;
   }
@@ -559,21 +616,21 @@ class NimbusWeatherCard extends HTMLElement {
     if (isNight) return null;
     if (!['sunny','partlycloudy','windy','windy-variant'].includes(condition)) return null;
 
-    const el = Math.max(-10, Math.min(90, this._sunElevation()));
+    const el  = Math.max(-10, Math.min(90, this._sunElevation()));
+
+    // Fixed position — top right
+    const xPct = 82, yPct = 12;
 
     if (el < -5)
       return 'linear-gradient(170deg,#080c1a 0%,#0e1628 100%)';
 
-    if (el < 0)
-      return 'radial-gradient(circle 130px at 88% 10%,rgba(255,255,200,1) 0%,rgba(255,180,40,0.92) 8%,rgba(255,80,20,0.75) 20%,rgba(140,60,100,0.80) 45%,rgba(30,20,60,1) 100%)';
+    if (el < 5)
+      return `radial-gradient(circle 130px at ${xPct}% ${yPct}%,rgba(255,255,200,1) 0%,rgba(255,180,40,0.92) 8%,rgba(255,80,20,0.75) 20%,rgba(140,60,100,0.80) 45%,rgba(30,20,60,1) 100%)`;
 
-    if (el < 8)
-      return 'radial-gradient(circle 130px at 84% 16%,rgba(255,255,220,1) 0%,rgba(255,230,100,0.92) 8%,rgba(255,180,60,0.70) 20%,rgba(140,190,240,0.85) 45%,rgba(50,110,200,1) 100%)';
+    if (el < 20)
+      return `radial-gradient(circle 130px at ${xPct}% ${yPct}%,rgba(255,255,220,1) 0%,rgba(255,230,100,0.92) 8%,rgba(255,180,60,0.70) 20%,rgba(140,190,240,0.85) 45%,rgba(50,110,200,1) 100%)`;
 
-    if (el < 30)
-      return 'radial-gradient(circle 130px at 84% 16%,rgba(255,255,255,1) 0%,rgba(255,255,160,0.92) 8%,rgba(200,230,255,0.85) 25%,rgba(80,170,240,0.92) 55%,rgba(30,120,210,1) 100%)';
-
-    return 'radial-gradient(circle 130px at 88% 10%,rgba(255,255,255,1) 0%,rgba(255,255,180,0.92) 8%,rgba(200,230,255,0.85) 25%,rgba(80,170,240,0.92) 55%,rgba(30,120,210,1) 100%)';
+    return `radial-gradient(circle 130px at ${xPct}% ${yPct}%,rgba(255,255,255,1) 0%,rgba(255,255,180,0.92) 8%,rgba(200,230,255,0.85) 25%,rgba(80,170,240,0.92) 55%,rgba(30,120,210,1) 100%)`;
   }
 
   // Ελέγχει αν έβρεξε τις τελευταίες 2 ώρες βάσει ιστορικού
@@ -645,6 +702,9 @@ class NimbusWeatherCard extends HTMLElement {
         animation:moonFloat 12s ease-in-out infinite;
       `;
       // Inner div: texture + rotation + phase shadow (overflow:hidden για clip)
+      const moonRotWrapper = document.createElement('div');
+      moonRotWrapper.id = 'moon-rot-wrapper';
+      moonRotWrapper.style.cssText = 'width:100%;height:100%;border-radius:50%;overflow:hidden;';
       const moonInner = document.createElement('div');
       moonInner.id = 'moon-inner';
       moonInner.style.cssText = `
@@ -654,9 +714,9 @@ class NimbusWeatherCard extends HTMLElement {
         background-image:url(data:image/jpeg;base64,${MOON_B64});
         background-repeat:repeat-x;
         background-size:110% 100%;
-        animation:moonRotation 60s linear infinite;
       `;
-      moonDiv.appendChild(moonInner);
+      moonRotWrapper.appendChild(moonInner);
+      moonDiv.appendChild(moonRotWrapper);
       // Inject keyframes if not present
       if (!this.shadowRoot.getElementById('moon-style')) {
         const st = document.createElement('style');
@@ -679,7 +739,10 @@ class NimbusWeatherCard extends HTMLElement {
     const size  = 60; // px
 
     // Phase shadows via box-shadow
-    const SHADOWS = {
+    // Southern hemisphere: waxing/waning are mirrored
+    const southernZones = ['southern_temperate', 'antarctic'];
+    const isSouthern = southernZones.includes(this._config.latitude_zone);
+    const SHADOWS_N = {
       'new_moon':        `inset 0 0 0 ${size/2}px rgba(4,7,18,0.98)`,
       'waxing_crescent': `inset ${size*0.4}px 0px ${size*0.3}px ${size*0.2}px rgba(4,7,18,0.97)`,
       'first_quarter':   `inset ${size*0.45}px 0px ${size*0.2}px 0px rgba(4,7,18,0.97)`,
@@ -689,6 +752,17 @@ class NimbusWeatherCard extends HTMLElement {
       'last_quarter':    `inset -${size*0.45}px 0px ${size*0.2}px 0px rgba(4,7,18,0.97)`,
       'waning_crescent': `inset -${size*0.4}px 0px ${size*0.3}px ${size*0.2}px rgba(4,7,18,0.97)`,
     };
+    const SHADOWS_S = {
+      'new_moon':        `inset 0 0 0 ${size/2}px rgba(4,7,18,0.98)`,
+      'waxing_crescent': `inset -${size*0.4}px 0px ${size*0.3}px ${size*0.2}px rgba(4,7,18,0.97)`,
+      'first_quarter':   `inset -${size*0.45}px 0px ${size*0.2}px 0px rgba(4,7,18,0.97)`,
+      'waxing_gibbous':  `inset -${size*0.15}px 0px ${size*0.2}px -${size*0.05}px rgba(4,7,18,0.95)`,
+      'full_moon':       `inset -${size*0.08}px ${size*0.08}px ${size*0.06}px -${size*0.05}px rgba(255,248,200,0.18), inset ${size*0.15}px -${size*0.15}px ${size*0.35}px ${size*0.25}px rgba(0,0,0,0.78)`,
+      'waning_gibbous':  `inset ${size*0.15}px 0px ${size*0.2}px -${size*0.05}px rgba(4,7,18,0.95)`,
+      'last_quarter':    `inset ${size*0.45}px 0px ${size*0.2}px 0px rgba(4,7,18,0.97)`,
+      'waning_crescent': `inset ${size*0.4}px 0px ${size*0.3}px ${size*0.2}px rgba(4,7,18,0.97)`,
+    };
+    const SHADOWS = isSouthern ? SHADOWS_S : SHADOWS_N;
 
     const moonOpacity = {
       'clear-night':0.95,'partlycloudy':0.55,'cloudy':0.15,
@@ -701,9 +775,28 @@ class NimbusWeatherCard extends HTMLElement {
 
     moonDiv.style.width    = `${size}px`;
     moonDiv.style.height   = `${size}px`;
-    moonDiv.style.right    = `${W * 0.1}px`;
-    moonDiv.style.top      = `${H * 0.12}px`;
-    moonDiv.style.opacity  = moonOpacity;
+    const moonPos  = this._moonPosition();
+    const moonEl   = moonPos.elevation;
+    const moonAz   = moonPos.azimuth;
+    // Fixed position top right
+    moonDiv.style.left     = `calc(82% - ${size/2}px)`;
+    moonDiv.style.top      = `calc(12% - ${size/2}px)`;
+    moonDiv.style.right    = '';
+    // Fade out near horizon (elevation < 8°)
+    const horizonFade = moonEl < 8 ? Math.max(0, moonEl / 8) : 1;
+    moonDiv.style.opacity  = (moonOpacity * horizonFade).toFixed(2);
+    moonDiv.style.transition = 'opacity 30s ease, left 60s ease, top 60s ease';
+    // Rotate moon based on latitude zone — apply to inner div to avoid conflicting with moonFloat
+    const MOON_ROT = {
+      'arctic':              0,
+      'northern_temperate':  45,
+      'tropical':            90,
+      'southern_temperate':  135,
+      'antarctic':           180,
+    };
+    const moonRotDeg = MOON_ROT[this._config.latitude_zone] ?? 45;
+    const moonRotWrap = moonDiv.querySelector('#moon-rot-wrapper');
+    if (moonRotWrap) moonRotWrap.style.transform = `rotate(${moonRotDeg}deg)`;
     // Εφαρμόζω shadow μόνο αν άλλαξε φάση
     const moonKey = `${condition}-${phase}`;
     if (moonDiv._lastKey !== moonKey) {
@@ -1200,44 +1293,43 @@ class NimbusWeatherCard extends HTMLElement {
       this._rainWindKey = windKey;
     }
     if (!this._rainDrops) {
-      const COUNT = condition === 'pouring' ? 200 : 120;
+      const COUNT = condition === 'pouring' ? 250 : 100;
       this._rainDrops = Array.from({length: COUNT}, () => ({
         x:  Math.random() * W,
         y:  Math.random() * H,
-        vy: 2.5 + Math.random() * 3.5,   // fall speed
-        len: 8 + Math.random() * 12,       // drop length
-        op: 0.25 + Math.random() * 0.55,   // opacity
+        vy: 2.5 + Math.random() * 3.5,
+        len: 10 + Math.random() * 14,
+        op: 0.15 + Math.random() * 0.30,
         tilt: (() => {
           const skew = this._windSkew(attrs);
-          // skew.far είναι px/280px — μετατρέπω σε tilt ratio
           return -(skew.far || 4) / 280 * 1.5;
         })(),
       }));
     }
 
     ctx.save();
-    ctx.strokeStyle = 'rgba(180,210,230,1)';
     ctx.lineCap = 'round';
 
     for (const d of this._rainDrops) {
-      // Update
       d.y += d.vy;
       d.x += d.vy * d.tilt;
       if (d.y > H + 10) { d.y = -10; d.x = Math.random() * W; }
       if (d.x > W + 10) d.x -= W + 10;
       if (d.x < -10)    d.x += W + 10;
 
-      // Draw teardrop-style: thick bottom, thin top
-      const grad = ctx.createLinearGradient(d.x, d.y - d.len, d.x, d.y);
+      // Meteor style: bright head (bottom/front), transparent tail (top/back)
+      const hx = d.x - d.tilt * d.len;
+      const hy = d.y - d.len;
+      const grad = ctx.createLinearGradient(hx, hy, d.x, d.y);
       grad.addColorStop(0,   `rgba(180,210,230,0)`);
-      grad.addColorStop(0.4, `rgba(180,210,230,${(d.op * 0.5).toFixed(2)})`);
-      grad.addColorStop(1,   `rgba(210,235,255,${d.op.toFixed(2)})`);
+      grad.addColorStop(0.7, `rgba(200,230,255,${(d.op * 0.8).toFixed(2)})`);
+      grad.addColorStop(1,   `rgba(230,245,255,${d.op.toFixed(2)})`);
 
       ctx.beginPath();
-      ctx.moveTo(d.x - d.tilt * d.len, d.y - d.len);
+      ctx.moveTo(hx, hy);
       ctx.lineTo(d.x, d.y);
       ctx.strokeStyle = grad;
-      ctx.lineWidth = 1.2 + d.op * 0.8;
+      ctx.lineWidth = 1.0 + d.op * 0.7;
       ctx.stroke();
     }
     ctx.restore();
@@ -1657,7 +1749,7 @@ class NimbusWeatherCard extends HTMLElement {
       const clampedEl = Math.max(-5, Math.min(90, elevation));
 
       // Opacity του ήλιου ανάλογα με συνθήκη
-      const sunOpacity = {
+      const sunOpacityBase = {
         'sunny': 1,
         'partlycloudy': 0.65,
         'cloudy': 0.18,
@@ -1667,6 +1759,10 @@ class NimbusWeatherCard extends HTMLElement {
         'snowy': 0.25, 'snowy-rainy': 0.15, 'hail': 0.2,
         'windy': 0.8, 'windy-variant': 0.75,
       }[condition] ?? 0.5;
+      // Fade in near horizon (elevation < 8°)
+      const el = this._sunElevation();
+      const sunHorizonFade = el < 8 ? Math.max(0, el / 8) : 1;
+      const sunOpacity = sunOpacityBase * sunHorizonFade;
 
       const sunBlur = {
         'sunny': 0, 'partlycloudy': 3,
@@ -1697,6 +1793,7 @@ class NimbusWeatherCard extends HTMLElement {
       const group = document.createElement('div');
       group.className = 'sun-glow-group';
       group.style.opacity = sunOpacity;
+      group.style.transition = 'opacity 30s ease';
       group.style.filter = sunBlur > 0 ? `blur(${sunBlur}px)` : '';
 
       const haze = document.createElement('div');
@@ -1717,16 +1814,51 @@ class NimbusWeatherCard extends HTMLElement {
       // Rays μόνο αν η ορατότητα είναι καλή
       if (sunOpacity > 0.4) group.appendChild(rays);
       // Lens flares μόνο για sunny + μεσημέρι (elevation > 50°)
-      if (condition === 'sunny' && clampedEl > 50) {
-        const track = document.createElement('div');
-        track.className = 'flare-track';
-        track.style.opacity = sunOpacity;
-        ['f1','f2','f3'].forEach(cls => {
-          const el = document.createElement('div');
-          el.className = 'flare ' + cls;
-          track.appendChild(el);
+      if (condition === 'sunny' && clampedEl > 15) {
+        const az   = this._sunAzimuth();
+        const sxPct = 82;  // fixed position
+        const elN  = Math.max(0, clampedEl) / 90;
+        const syPct = 12;  // fixed position
+
+        // Flares scatter opposite to sun (lens flare goes away from light source)
+        // Flares scatter along the opposite axis from sun
+        // Sun center in % coords, flares go toward center/opposite
+        const cxPct = 50; const cyPct = 50; // card center
+        const dxPct = cxPct - sxPct; // direction from sun to center
+        const dyPct = cyPct - syPct;
+        const flareData = [
+          { w: 8,  h: 8,  t: 0.3, opacity: 0.45 },
+          { w: 18, h: 18, t: 0.6, opacity: 0.28 },
+          { w: 32, h: 32, t: 0.9, opacity: 0.16 },
+        ];
+        const flareGroup = document.createElement('div');
+        flareGroup.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:2';
+        const _flareEls = [];
+        flareData.forEach((f, i) => {
+          const fl = document.createElement('div');
+          fl.className = 'flare f' + (i+1);
+          const fxPct = sxPct + dxPct * f.t;
+          const fyPct = syPct + dyPct * f.t;
+          fl.style.left    = `calc(${fxPct}% - ${f.w/2}px)`;
+          fl.style.top     = `calc(${fyPct}% - ${f.h/2}px)`;
+          fl.style.width   = f.w + 'px';
+          fl.style.height  = f.h + 'px';
+          fl.style.opacity = (sunOpacity * f.opacity).toFixed(2);
+          flareGroup.appendChild(fl);
+          _flareEls.push(fl);
         });
-        box.appendChild(track);
+        // f1 σταθερό, f2 και f3 με μικρή sine κίνηση
+        const _flareStart = performance.now();
+        const _flareAnim = (now) => {
+          if (!flareGroup.isConnected) return;
+          const t = (now - _flareStart) / 1000;
+          const wave = Math.sin(t * 0.5);
+          if (_flareEls[1]) _flareEls[1].style.transform = `translateY(${(wave * 3).toFixed(2)}px)`;
+          if (_flareEls[2]) _flareEls[2].style.transform = `translateY(${(wave * 6).toFixed(2)}px)`;
+          requestAnimationFrame(_flareAnim);
+        };
+        requestAnimationFrame(_flareAnim);
+        box.appendChild(flareGroup);
       }
       // Atmospheric bottom-left glow μόνο για sunny
       if (condition === 'sunny') {
@@ -1834,7 +1966,7 @@ class NimbusWeatherCard extends HTMLElement {
   _buildShell() {
     this.shadowRoot.innerHTML = `
 <style>
-:host { display:block; font-family:system-ui,-apple-system,sans-serif; width:100% }
+:host { display:block; font-family:system-ui,-apple-system,sans-serif; width:100%; position:relative; z-index:0; isolation:isolate }
 .wrapper { position:relative; border-radius:24px; width:100% }
 
 /* ── BACKGROUNDS ── */
@@ -2067,20 +2199,21 @@ class NimbusWeatherCard extends HTMLElement {
 /* ── WIND STREAKS ── */
 
 
+
 .splash-l, .splash-r {
-  position:absolute; width:2px; height:5px;
-  background:rgba(255,255,255,0.75); border-radius:50% 50% 40% 40%;
+  position:absolute; width:2px; height:6px;
+  background:rgba(200,230,255,0.85); border-radius:50% 50% 40% 40%;
   transform-origin:bottom center; pointer-events:none;
 }
 .splash-l, .splash-r, .splash-c { animation:splashIn 0.15s ease-out, splashOut 0.4s ease-in 0.2s forwards; }
 .splash-l { animation:splashIn 0.15s ease-out, splashLeft 0.45s ease-out, splashOut 0.4s ease-in 0.2s forwards; }
 .splash-r { animation:splashIn 0.15s ease-out, splashRight 0.45s ease-out, splashOut 0.4s ease-in 0.2s forwards; }
-.splash-c { position:absolute; width:3px; height:3px; background:rgba(255,255,255,0.60); border-radius:50%; pointer-events:none; animation:splashIn 0.15s ease-out, splashCenter 0.35s ease-out, splashOut 0.4s ease-in 0.15s forwards; }
+.splash-c { position:absolute; width:3px; height:3px; background:rgba(200,230,255,0.85); border-radius:50%; pointer-events:none; animation:splashIn 0.15s ease-out, splashCenter 0.35s ease-out, splashOut 0.4s ease-in 0.15s forwards; }
 @keyframes splashIn { 0%{opacity:0;transform:scale(0.5)} 100%{opacity:1;transform:scale(1)} }
 @keyframes splashOut { 0%{opacity:1;transform:scale(1)} 100%{opacity:0;transform:scale(0.8);visibility:hidden} }
-@keyframes splashLeft  { 0%{transform:translate(0,0) rotate(-35deg) scaleY(1.4);opacity:.9} 60%{transform:translate(-8px,-10px) rotate(-45deg) scaleY(.8);opacity:.6} 100%{transform:translate(-12px,2px) rotate(-20deg) scaleY(.3);opacity:0} }
-@keyframes splashRight { 0%{transform:translate(0,0) rotate(35deg) scaleY(1.4);opacity:.9} 60%{transform:translate(8px,-10px) rotate(45deg) scaleY(.8);opacity:.6} 100%{transform:translate(12px,2px) rotate(20deg) scaleY(.3);opacity:0} }
-@keyframes splashCenter { 0%{transform:translate(-50%,0) scaleX(2);opacity:.8} 50%{transform:translate(-50%,-6px) scaleX(1);opacity:.5} 100%{transform:translate(-50%,0) scaleX(1);opacity:0} }
+@keyframes splashLeft  { 0%{transform:translate(0,0) rotate(-35deg) scaleY(1.2);opacity:.9} 60%{transform:translate(-8px,-10px) rotate(-45deg) scaleY(.7);opacity:.6} 100%{transform:translate(-10px,2px) rotate(-20deg) scaleY(.2);opacity:0} }
+@keyframes splashRight { 0%{transform:translate(0,0) rotate(35deg) scaleY(1.2);opacity:.9} 60%{transform:translate(8px,-10px) rotate(45deg) scaleY(.7);opacity:.6} 100%{transform:translate(10px,2px) rotate(20deg) scaleY(.2);opacity:0} }
+@keyframes splashCenter { 0%{transform:translate(-50%,0) scaleX(2);opacity:.9} 50%{transform:translate(-50%,-7px) scaleX(1);opacity:.6} 100%{transform:translate(-50%,0) scaleX(1);opacity:0} }
 .di   { display:flex; align-items:center; gap:5px; font-size:12px; opacity:.9 }
 .cloud { position:absolute; pointer-events:none; will-change:transform; animation:cloudMove linear infinite; filter:blur(3px) }
 .cloud1 { top:6%;  width:180px; left:-190px; animation-duration:80s; animation-delay:0s;   opacity:0.9 }
@@ -2126,49 +2259,54 @@ class NimbusWeatherCard extends HTMLElement {
 
 
 /* ── LENS FLARES ── */
-.flare-track {
-  position:absolute; inset:0; pointer-events:none; z-index:2;
-  animation:flareSwing 14s ease-in-out infinite;
-  transform-origin:88% 3%;
-}
-@keyframes flareSwing {
-  0%,100% { transform:translate3d(0px,0px,0) }
-  50%     { transform:translate3d(0px,10px,0) }
-}
 .flare { position:absolute; border-radius:50%; pointer-events:none; }
 
 /* ── Lens disc flares — λεπτό περίγραμμα + blur εσωτερικά ── */
 /* f1 — tiny disc, near sun */
 .f1 {
-  width:12px; height:12px; top:20%; left:60%;
-  border-radius:50%;
-  border:1px solid rgba(135,206,255,0.70);
-  background:radial-gradient(circle, rgba(255,255,255,0.25) 0%, rgba(220,238,255,0.10) 60%, transparent 100%);
-  box-shadow:0 0 6px rgba(255,255,255,0.18), inset 0 0 4px rgba(255,255,255,0.15);
+  position:absolute; border-radius:50%; pointer-events:none;
+  border:0.5px solid rgba(180,220,255,0.5);
+  background:radial-gradient(circle at 70% 30%, rgba(255,255,255,0.18) 0%, rgba(200,230,255,0.06) 50%, transparent 100%);
   backdrop-filter:blur(2px); -webkit-backdrop-filter:blur(2px);
   animation:flarePulse 8s ease-in-out infinite; animation-delay:0s;
+  overflow:hidden;
 }
-
-/* f2 — small disc */
+.f1::after {
+  content:''; position:absolute;
+  width:35%; height:35%;
+  border-radius:50%;
+  background:rgba(255,255,255,0.55);
+  top:8%; left:58%;
+}
 .f2 {
-  width:30px; height:30px; top:27%; left:47%;
-  border-radius:50%;
-  border:1px solid rgba(135,206,255,0.55);
-  background:radial-gradient(circle, rgba(255,255,255,0.18) 0%, rgba(210,232,255,0.08) 55%, transparent 100%);
-  box-shadow:0 0 10px rgba(255,255,255,0.12), inset 0 0 8px rgba(255,255,255,0.10);
+  position:absolute; border-radius:50%; pointer-events:none;
+  border:0.5px solid rgba(180,220,255,0.35);
+  background:radial-gradient(circle at 65% 30%, rgba(255,255,255,0.12) 0%, rgba(200,230,255,0.04) 50%, transparent 100%);
   backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px);
-  animation:flarePulse 8s ease-in-out infinite; animation-delay:0.8s;
+  animation:none;
+  overflow:hidden;
 }
-
-/* f3 — medium disc */
-.f3 {
-  width:54px; height:54px; top:33%; left:31%;
+.f2::after {
+  content:''; position:absolute;
+  width:30%; height:30%;
   border-radius:50%;
-  border:1px solid rgba(135,206,255,0.40);
-  background:radial-gradient(circle, rgba(255,255,255,0.12) 0%, rgba(200,228,255,0.06) 50%, transparent 100%);
-  box-shadow:0 0 16px rgba(255,255,255,0.08), inset 0 0 14px rgba(255,255,255,0.08);
+  background:rgba(255,255,255,0.40);
+  top:10%; left:55%;
+}
+.f3 {
+  position:absolute; border-radius:50%; pointer-events:none;
+  border:0.5px solid rgba(180,220,255,0.25);
+  background:radial-gradient(circle at 60% 35%, rgba(255,255,255,0.08) 0%, rgba(200,228,255,0.03) 50%, transparent 100%);
   backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px);
-  animation:flarePulse 8s ease-in-out infinite; animation-delay:1.6s;
+  animation:none;
+  overflow:hidden;
+}
+.f3::after {
+  content:''; position:absolute;
+  width:25%; height:25%;
+  border-radius:50%;
+  background:rgba(255,255,255,0.30);
+  top:12%; left:52%;
 }
 
 
@@ -2177,6 +2315,7 @@ class NimbusWeatherCard extends HTMLElement {
   0%,100% { opacity:0.55; transform:scale(1) }
   50%     { opacity:0.90; transform:scale(1.04) }
 }
+
 </style>
 
 <div class="wrapper">
@@ -2284,7 +2423,7 @@ class NimbusWeatherCard extends HTMLElement {
           <div class="det" id="det">
             ${this._config.show_clock ? `<div class="det-clock${this._config.show_details ? '' : ' det-clock-only'}" id="det-clock"><span class="det-clock-date"></span><span class="det-clock-time"></span></div>` : ''}
             ${this._config.show_details ? `<div class="det-row-main">
-              <div class="di"><div class="dic">${MDI.humidity}</div>${this._fmt(attrs.humidity)}%</div>
+              ${attrs.humidity != null ? `<div class="di"><div class="dic">${MDI.humidity}</div>${this._fmt(attrs.humidity)}%</div>` : ''}
               <div class="di"><div class="dic">${MDI.wind}</div>${this._windSpeed(attrs)}</div>
               ${(attrs.pressure !== undefined && attrs.pressure !== null) ? `<div class="di"><div class="dic">${MDI.pressure}</div>${this._fmt(attrs.pressure)} hPa</div>` : ''}
               ${(attrs.feels_like !== undefined || attrs.apparent_temperature !== undefined) ? `<div class="di"><div class="dic">${MDI.thermometer}</div>Feels ${this._t(attrs.feels_like ?? attrs.apparent_temperature)}°</div>` : ''}
@@ -2358,7 +2497,7 @@ class NimbusWeatherCard extends HTMLElement {
       'snowy-rainy':     { min:600, max:1000, streams:2 },
       'lightning-rainy': { min:250, max:550,  streams:6 },
       'pouring':         { min:150, max:350,  streams:8 },
-    }[condition] || { min:500, max:900, streams:3 };
+    }[condition] || { min:250, max:500, streams:6 };
 
     const activeSplashes = new Set();
 
@@ -2379,14 +2518,10 @@ class NimbusWeatherCard extends HTMLElement {
       r.style.transform = `scale(${sizeVar})`;
       c.style.transform = `scale(${(sizeVar * 0.7).toFixed(2)})`;
       layer.appendChild(l); layer.appendChild(r); layer.appendChild(c);
-      activeSplashes.add(l); activeSplashes.add(r); activeSplashes.add(c);
-      const cleanup = (el) => {
-        el.addEventListener('animationend', () => {
-          el.remove();
-          activeSplashes.delete(el);
-        }, { once: true });
-      };
-      cleanup(l); cleanup(r); cleanup(c);
+      [l,r,c].forEach(el => {
+        activeSplashes.add(el);
+        el.addEventListener('animationend', () => { el.remove(); activeSplashes.delete(el); }, { once: true });
+      });
     };
 
     this._splashIntervals = [];
@@ -2702,6 +2837,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
       <option value="en" ${this._val('language','en')==='en'?'selected':''}>English</option>
       <option value="es" ${this._val('language','en')==='es'?'selected':''}>Espanol</option>
       <option value="de" ${this._val('language','en')==='de'?'selected':''}>Deutsch</option>
+      <option value="nl" ${this._val('language','nl')==='nl'?'selected':''}>Nederlands</option>
     </select>
 
     <div><div class="label">Show Forecast Strip</div></div>
@@ -2743,6 +2879,16 @@ class NimbusWeatherCardEditor extends HTMLElement {
     <select id="sun_entity">
       <option value="">— None —</option>
       ${sunEntities.map(e=>`<option value="${e}" ${c.sun_entity===e?'selected':''}>${e}</option>`).join('')}
+    </select>
+  </div>
+  <div class="row">
+    <div><div class="label">Latitude Zone</div><div class="sublabel">Moon orientation</div></div>
+    <select id="latitude_zone" style="width:100%;padding:6px;border-radius:8px;border:1px solid var(--color-border-secondary);background:var(--color-background-secondary);color:var(--color-text-primary);font-size:14px">
+      <option value="arctic" ${(c.latitude_zone||'northern_temperate')==='arctic'?'selected':''}>Arctic (>66°N)</option>
+      <option value="northern_temperate" ${(c.latitude_zone||'northern_temperate')==='northern_temperate'?'selected':''}>Northern Temperate (23-66°N)</option>
+      <option value="tropical" ${(c.latitude_zone||'northern_temperate')==='tropical'?'selected':''}>Tropical (23°S - 23°N)</option>
+      <option value="southern_temperate" ${(c.latitude_zone||'northern_temperate')==='southern_temperate'?'selected':''}>Southern Temperate (23-66°S)</option>
+      <option value="antarctic" ${(c.latitude_zone||'northern_temperate')==='antarctic'?'selected':''}>Antarctic (>66°S)</option>
     </select>
   </div>
 </div>
@@ -2855,6 +3001,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
         wind_unit: sr.getElementById('wind_unit')?.value || 'kmh',
         show_clock: getChecked('show_clock', false),
         ufo_easter_egg: getChecked('ufo_easter_egg', true),
+        latitude_zone: sr.getElementById('latitude_zone')?.value || 'northern_temperate',
         local_sensors: getSensors(),
       };
       const name = sr.getElementById('name')?.value?.trim();
