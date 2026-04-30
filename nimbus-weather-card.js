@@ -782,10 +782,11 @@ class NimbusWeatherCard extends HTMLElement {
     moonDiv.style.left     = `calc(82% - ${size/2}px)`;
     moonDiv.style.top      = `calc(12% - ${size/2}px)`;
     moonDiv.style.right    = '';
-    // Fade out near horizon (elevation < 8°)
-    const horizonFade = moonEl < 8 ? Math.max(0, moonEl / 8) : 1;
-    moonDiv.style.opacity  = (moonOpacity * horizonFade).toFixed(2);
-    moonDiv.style.transition = 'opacity 30s ease, left 60s ease, top 60s ease';
+    // Hide moon when sun is above horizon
+    const sunEl = this._sunElevation();
+    const finalMoonOpacity = sunEl > 2 ? 0 : moonOpacity;
+    moonDiv.style.opacity  = finalMoonOpacity.toFixed(2);
+    moonDiv.style.transition = 'opacity 30s ease';
     // Rotate moon based on latitude zone — apply to inner div to avoid conflicting with moonFloat
     const MOON_ROT = {
       'arctic':              0,
