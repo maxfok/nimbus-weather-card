@@ -2379,7 +2379,7 @@ class NimbusWeatherCard extends HTMLElement {
         return (h % 12 || 12) + (h < 12 ? 'am' : 'pm');
       }
     }
-    const locMap = {'en':'en-US','es':'es-ES','de':'de-DE'};
+    const locMap = {'en':'en-US','es':'es-ES','de':'de-DE','nl':'nl-NL'};
     const loc = locMap[this._config?.language||'en'] || 'en-US';
     return d.toLocaleDateString(loc, { weekday: 'short' }).toUpperCase();
   }
@@ -2477,7 +2477,7 @@ class NimbusWeatherCard extends HTMLElement {
     const el = this.shadowRoot?.getElementById('det-clock');
     if (!el) return;
     const now = new Date();
-    const locMap = {'en':'en-US','es':'es-ES','de':'de-DE'};
+    const locMap = {'en':'en-US','es':'es-ES','de':'de-DE','nl':'nl-NL'};
     const loc = locMap[this._config?.language||'en'] || 'en-US';
     const dateStr = now.toLocaleDateString(loc, { weekday:'short', day:'numeric', month:'short' });
     const h = String(now.getHours()).padStart(2,'0');
