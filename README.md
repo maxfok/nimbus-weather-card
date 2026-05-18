@@ -1,11 +1,11 @@
 # 🌦️ Nimbus Weather Card
 
-![Nimbus Weather Card](https://github.com/maxfok/nimbus-weather-card/raw/main/Screen_Recording_2026-05-09_at_7_59_24_AM.gif)
+![Nimbus Weather Card](media/nimbus-weather-card-demo.gif)
 
 A beautiful, Apple Weather‑inspired custom card for Home Assistant with smooth particle effects, dynamic backgrounds, and full moon phase support.
 
 🔗 **GitHub**: https://github.com/maxfok/nimbus-weather-card  
-📦 **HACS**: Search "Nimbus Weather Card"
+📦 **HACS**: Install as a custom repository while default HACS inclusion is pending
 
 ---
 
@@ -26,8 +26,6 @@ A beautiful, Apple Weather‑inspired custom card for Home Assistant with smooth
 ---
 
 ## 🆕 What's new in v2.3.0
-
-"https://github.com/maxfok/nimbus-weather-card/raw/main/Screen_Recording_2026-05-09_at_7_59_24_AM.gif"
 
 This release focuses on atmosphere, smoother transitions, and a more polished forecast modal experience.
 
@@ -126,7 +124,7 @@ On clear nights, a random star detaches and streaks diagonally across the sky ev
 
 ## 🔧 Installation
 
-### Via HACS (recommended)
+### Via HACS custom repository
 1. Open HACS → Frontend
 2. Click the three-dot menu (⋮) → **Custom repositories**
 3. Add URL: `https://github.com/maxfok/nimbus-weather-card`
