@@ -1,4 +1,4 @@
-// Nimbus Weather Card v2.3.1
+// Nimbus Weather Card v2.3.3
 // https://github.com/maxfok/nimbus-weather-card
 // (c) 2024 Gerasimos Fokaefs — MIT License
 
