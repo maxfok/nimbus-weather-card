@@ -1,232 +1,325 @@
 # 🌦️ Nimbus Weather Card
 
-A beautiful, Apple Weather‑inspired custom card for Home Assistant with smooth particle effects, dynamic backgrounds, moon phase support, and local sensor display.
+![Nimbus Weather Card](media/nimbus-weather-card-demo.gif)
 
-<img width="1440" height="1926" alt="image" src="https://github.com/maxfok/nimbus-weather-card/blob/main/nimbus-weather-card-preview.png"/>
+A beautiful, Apple Weather‑inspired custom card for Home Assistant with multi-source weather tabs, smooth particle effects, dynamic backgrounds, and detailed moon phase support.
+
+🔗 **GitHub**: https://github.com/maxfok/nimbus-weather-card  
+📦 **HACS**: Available in HACS
 
 ---
 
 ## ✨ Features
 
+- **Multi-source weather tabs** – display multiple weather integrations, locations, or local stations in one card
+- **Redesigned visual editor** – configure sources through editor tabs with a live preview that follows the active source
 - **Stunning visuals** – gradient backgrounds, floating particles (rain, snow, fog, clouds, wind, lightning)
 - **Dynamic day/night** – automatically switches between sun/moon, starry sky, and colour‑shifting gradients
-- **Moon phases** – renders realistic waxing/waning moons with craters — auto‑calculated from date, or from a `moon_entity` sensor
-- **Local sensor panel** – display up to 4 local sensors (temperature, humidity, CO₂, etc.) with custom MDI icons, as an alternative to the forecast strip
-- **Visual config editor** – configure everything from the HA UI without writing YAML — appears in the Add Card menu
-- **Feels‑like temperature** – shows apparent temperature when available from your weather provider
-- **Smart units** – automatically converts wind speed (`mph`, `m/s` → `km/h`) and temperature (`°C` / `°F`)
-- **Hourly forecast** – shows actual hours (14:00, 15:00…) instead of day names
-- **Optimised performance** – debounced updates, icon caching, hardware‑accelerated animations
+- **Moon phases** – renders realistic waxing/waning moons with a continuous terminator model
+- **Shooting stars** – on clear nights, a random star detaches and streaks across the sky, then fades back in
+- **Feels‑like temperature** – shows apparent temperature when available
+- **Smart units** – automatically converts °C/°F reading native entity attributes
+- **Multilingual** – English, Spanish, German, Dutch (and more via PR!)
+- **Hourly/Daily forecast toggle** – tap the forecast bar to switch view
+- **Custom tap action** – navigate, call-service, url, or more-info
+- **Clock & date panel** – optional, togglable
+- **HACS compatible** – one-click install from HACS
 
 ---
 
-## 📦 Installation
+## 🆕 What's new in v2.4.2
 
-### Via HACS (recommended)
+v2.4.2 is a focused polish release for the v2.4.x visual and forecast stack.
 
-> ⏳ **Pending inclusion in HACS default store.** Until then, add as a custom repository:
+It improves the daily high/low display, brings forecast moon icons visually closer to the large moon, and refines the aurora effect into a softer two-layer curtain with green and cyan light.
 
-1. Open **HACS → Frontend**
-2. Click the **3 dots** (top right) → **Custom repositories**
-3. Add `https://github.com/maxfok/nimbus-weather-card` with category **Lovelace**
-4. Click **Add** → search for **Nimbus Weather Card** → **Download**
-5. Refresh your browser cache (`Shift+Reload`)
+### 🌡️ Stable daily high/low
 
-### Manual
+- Daily high/low values are now stabilized from the daily forecast range seen during the day.
+- Nimbus keeps the widest valid daily forecast range it has seen for the active source/date, instead of letting the low follow the current or remaining hourly forecast.
+- Temporary invalid restart/update ranges such as `27° / 27°` are ignored when better daily data is already available.
 
-1. Download `nimbus-weather-card.js`
-2. Place it in your `config/www/community/nimbus-weather-card/` folder
-3. Add to your Lovelace resources:
+### 🌙 Moon icon polish
+
+- Forecast and modal moon icons now use a grey moon palette to better match the large moon rendering.
+- The existing phase/terminator mechanism remains unchanged, so the icons keep the same phase logic while looking less yellow.
+
+### 🌌 Aurora polish
+
+- Aurora rendering has been reworked into a layered cyan-and-green curtain.
+- The effect now sits slightly higher in the sky and uses a larger curved motion inspired by the earlier v2.3.3 aurora flow.
+- Pink/purple mass has been removed in favour of cyan, tea-mint, and aurora-green blending.
+
+---
+
+## 🆕 What's new in v2.4.1
+
+v2.4.1 is a small but important visual and reliability hotfix after the v2.4.0 multi-source release.
+
+It tightens condition handling across weather integrations and local condition sensors, fixes fog rendering artifacts, and corrects night backgrounds for edge-case states such as `overcast` and `exceptional`.
+
+### 🔧 Condition rendering fixes
+
+- Weather states are now normalized before rendering, so common variants such as `Partly Cloudy`, `partly-cloudy`, `clear night`, `mist`, `haze`, `drizzle`, `heavy-rain`, `thunderstorm`, `snow`, `sleet`, and `wintry-mix` map to the intended Nimbus visuals.
+- `overcast` now uses the cloudy icon instead of falling back to the exceptional warning icon.
+- `overcast` and `exceptional` now have proper night background handling in both CSS and canvas rendering paths.
+- Moon visibility is reduced for heavy/uncertain conditions such as `overcast`, `exceptional`, and `lightning`, so the moon no longer appears too clear through dense cloud or warning states.
+
+### 🌫️ Fog polish
+
+- Fog rendering no longer uses visible rectangular/horizontal bands.
+- Mist layers now render as softer radial veils with feathered edges for a more natural diffuse fog effect.
+
+### ⚠️ Exceptional state polish
+
+- The `exceptional` warning icon has been refined with a more balanced isosceles triangle and clearer centered mark.
+
+---
+
+## 🆕 What's new in v2.4.0
+
+What started as another round of visual polish grew into a much deeper update. Nimbus can now handle multiple weather sources, keep local station data separate from forecast integrations, and render the sky with smoother transitions, improved moon phases, softer clouds, and richer atmospheric effects.
+
+The result is a more flexible card with better support for mixed weather sources and a more polished visual experience.
+
+### 🌍 Multi-source weather
+
+Nimbus Weather Card can now display multiple weather sources as tabs above the card. You can combine multiple weather integrations, multiple locations from supported integrations, a local weather station as its own source, and supplementary sensors for details missing from a forecast integration.
+
+Each source can define its own name, weather entity, forecast type, display options, and optional sensors for humidity, wind, precipitation, pressure, UV index, feels-like temperature, and weather condition.
+
+Existing single-entity configurations continue to work without changes.
+
+### 🛠️ Editor improvements
+
+The editor now includes a dedicated **Weather Sources** section. Sources are managed through tabs, matching the way they appear on the card. The preview automatically follows the selected source, making multi-source configuration easier to understand.
+
+Per-source options include forecast type, maximum forecast items, 24-hour time format, forecast strip visibility, detail visibility, clock visibility, and wind speed unit.
+
+### 🌡️ Local weather station support
+
+Local weather station data can now coexist with forecast integrations instead of only overriding the primary weather entity.
+
+This is useful when an integration provides the forecast while local sensors provide more accurate conditions for your home, garden, balcony, or other nearby locations.
+
+### 🌙 Moon rendering
+
+Moon rendering now uses a continuous terminator model instead of the previous discrete phase mask and offset approach.
+
+The illuminated edge follows the calculated phase fraction, producing more accurate crescents, quarters, and gibbous phases with smoother transitions. The large moon is rendered using a canvas-based texture and phase composite with cleaner disk masking, softer terminator feathering, and more consistent illumination.
+
+Forecast and modal moon icons now use the same phase calculation as the large moon.
+
+### 🌅 Sky and atmosphere
+
+The sky renderer has been refined across the day/night cycle, with smoother sunrise continuity, sunset transitions, twilight gradients, astronomical night, deep-night blue balance, and sun/moon cross-fade timing.
+
+Aurora rendering now supports both Arctic and Antarctic latitude zones, including Aurora Australis for southern hemisphere configurations using a softer green, teal, and mint colour palette.
+
+Cloud rendering has also been improved, especially on mobile and simplified rendering paths. Procedural clouds now use more natural variation in shape, timing, opacity, movement, and spacing.
+
+### ☀️ Lens flares
+
+Lens flares are now limited to sunny conditions and peak near solar noon. Their intensity has also been reduced so they complement the sun instead of dominating the scene.
+
+### 🔧 Reliability and interaction fixes
+
+- Daily high/low temperature handling no longer derives the daily low from the current or hourly temperature.
+- Temporary invalid daily forecast ranges after Home Assistant restarts or updates are ignored.
+- Unknown or unavailable supplemental sensor states are ignored to prevent invalid `NaN` values from appearing in the card.
+- The active weather source is preserved after dashboard refresh whenever possible.
+- More Info opens the currently active source instead of always opening the first weather entity.
+- The editor preview follows the source currently being edited.
+- Card picker metadata has been updated for improved Home Assistant discovery.
+
+---
+
+## 🆕 What's new in v2.3.0
+
+This release focuses on atmosphere, smoother transitions, and a more polished forecast modal experience.
+
+### 🌅 Slow Background Cross-Fade
+Sky gradients now transition with a slow 3-minute cross-fade instead of an abrupt change. Sunrise, golden hour, daytime, and night phases blend naturally as sun elevation changes. The card also schedules a refresh around key sun-elevation thresholds so the sky updates at the right moment.
+
+### 🌌 Aurora Borealis
+Clear nights in the Arctic latitude zone can show a soft aurora overlay with layered green, blue, and purple ribbons. Enabled via `latitude_zone: arctic` in your card config.
 
 ```yaml
-resources:
-  - url: /local/community/nimbus-weather-card/nimbus-weather-card.js
-    type: module
+type: custom:nimbus-weather-card
+entity: weather.home
+latitude_zone: arctic
 ```
+
+### ⚡ Lightning Flash Effect
+Thunderstorm conditions now include a sky-flash overlay that briefly illuminates clouds, rain, and droplets. Bolt and flash fading is slower and the secondary flash delay is longer, so strikes feel more natural.
+
+### 📊 Forecast Modal Polish
+- Haptic feedback on open/close
+- Tap backdrop to close
+- Swipe down from handle to close
+- Escape key support on desktop
+- Improved accessibility (`role="dialog"`, `aria-modal`, `aria-hidden`)
+- Larger modal handle
+- Better mobile gesture handling (no background scroll bleed)
+
+### 🌠 Shooting Stars
+On clear nights, a random star detaches and streaks diagonally across the sky every 4–14 seconds, then fades back into place.
+
+### 🔧 Small Improvements
+- Refined night gradient colour
+- Improved layer ordering for backgrounds, aurora, effects, lightning, droplets, and content
+- Moon remains visible when condition is explicitly `clear-night`
+- Internal timer cleanup when card is removed or rebuilt
+- Removed leftover debug logs
+
+---
+
+## 📋 Changelog
+
+### v2.4.2
+- 🌡️ **Stable daily range** — daily high/low now preserves the widest valid daily forecast range seen for the source/date instead of following current or remaining hourly temperatures
+- 🌙 **Grey moon forecast icons** — forecast and modal moon icons now better match the large grey moon while keeping the existing phase/terminator logic
+- 🌌 **Aurora curtain polish** — reworked aurora into a higher cyan/green layered curtain with larger curved motion and no pink/purple mass
+- 🐛 **Restart range guard** — temporary invalid daily ranges during Home Assistant restarts/updates are ignored when stable daily data is already available
+
+### v2.4.1
+- 🐛 **Condition normalization** — common condition sensor variants now map to the intended Nimbus weather states
+- 🐛 **Overcast icon fallback** — `overcast` now uses the cloudy icon instead of the exceptional warning icon
+- 🐛 **Night background fixes** — `overcast` and `exceptional` no longer fall back to the bright default canvas background at night
+- 🌙 **Condition-aware moon opacity** — the moon is dimmer behind overcast, exceptional, and lightning conditions
+- 🌫️ **Fog rendering polish** — replaced visible horizontal fog bands with softer radial mist veils
+- ⚠️ **Exceptional icon polish** — refined the warning triangle shape for better balance at small sizes
+
+### v2.4.0
+- ✨ **Multi-source weather tabs** — display multiple weather integrations, multiple locations, or local stations from one card
+- ✨ **Redesigned source editor** — configure sources through tabs with a preview that follows the active source
+- ✨ **Per-source options** — forecast type, max items, 24-hour time, forecast strip, details, clock, and wind unit can now vary by source
+- ✨ **Local weather station as a source** — local sensors can coexist with forecast integrations instead of only overriding them
+- 🌙 **Continuous moon terminator** — replaces the older mask/offset approach with smoother and more accurate phase rendering
+- 🌅 **Smoother sky transitions** — improved sunrise, sunset, twilight, astronomical night, and sun/moon cross-fade behaviour
+- 🌌 **Aurora Australis** — Antarctic latitude zones now get a southern aurora treatment alongside Arctic aurora support
+- ☁️ **Improved clouds** — more natural mobile/procedural clouds and adjusted desktop streams
+- ☀️ **Refined lens flares** — visible only in sunny conditions and strongest near solar noon
+- 🌡️ **Daily high/low fixes** — daily lows no longer follow current/hourly temperature, and invalid restart ranges are ignored
+- 🐛 **Unknown sensor guard** — unavailable supplemental sensors no longer produce `NaN` values
+- 🐛 **Interaction fixes** — active source persistence, More Info for the selected source, and editor preview source syncing
+- 🔧 **Card picker metadata** — updated Home Assistant discovery information
+
+### v2.3.0
+- ✨ **Slow background cross-fade** — sky gradients blend over ~3 minutes between elevation zones
+- ✨ **Aurora Borealis** — soft aurora overlay for `latitude_zone: arctic` on clear nights
+- ✨ **Lightning flash effect** — sky illumination during thunderstorms, slower/more natural timing
+- ✨ **Forecast modal polish** — haptic feedback, swipe-to-close, backdrop tap, Escape key, accessibility improvements
+- ✨ **Shooting stars** — existing stars detach, streak, and fade back in on clear nights
+- 🐛 Moon remains visible when condition is explicitly `clear-night`
+- 🔧 Internal timer cleanup, improved layer ordering, removed debug logs
+
+### v2.2.0
+#### 🌅 Sky & Sun
+- New multi-phase sky gradient system with smooth colour interpolation
+- 7 elevation zones: deep night → nautical dawn → blue hour → sunrise/sunset → golden hour → morning → daytime → midday
+- Extended sun elevation range to −30°..90°
+
+#### 🌙 Moon
+- Moon auto-detected from `sensor.moon_phase` (no config needed)
+- Moon fixed to top-right corner — no longer goes offscreen on short cards
+- More precise phase calculation using UTC time
+
+#### 📊 Forecast Modal
+- Tap the forecast bar to swap between daily ↔ hourly view
+- `tap_action` support: More Info, Navigate, Open URL, None
+
+#### 📱 Mobile
+- Dedicated mobile cloud rendering for sharper display on touch devices
+- Better cloud detection for rainy, pouring, snowy-rainy conditions
+
+#### 🌡️ Thermometer
+- Redesigned icon matching the style of humidity, wind and pressure icons
+
+#### 🐛 Bug Fixes
+- High/Low always shows daily values even when hourly forecast is selected
+- `clear-night` condition now correctly shows sun icon during daytime (fixes KNMI / NL Weather integration)
+
+### v2.0.1
+- ✨ **Multilingual support** — English, Spanish, German (thanks u/R3x10 & u/super-gando!)
+- ✨ Language selector in card editor
+- 🐛 Fix: HACS update notifications now work correctly (missing `filename` in hacs.json)
+- 🐛 Fix: Forecast icons correctly show day/night per hour (no more moon at 1pm!)
+- 🐛 Fix: Sun entity takes priority over weather state for day/night detection
+
+### v2.0.0 — Complete rewrite 🎉
+- ✨ Animated rain with wind skew (based on `wind_bearing`)
+- ✨ Glass window droplets for rainy conditions
+- ✨ SVG cloud layers with per-condition opacity
+- ✨ Snow animation with 3-layer canvas and sine-wave sway
+- ✨ Lightning with midpoint-displacement branching bolt algorithm
+- ✨ Autumn leaf gusts for windy conditions
+- ✨ Dynamic solar gradient based on `sun.sun` elevation
+- ✨ NASA moon texture with full 8-phase rendering
+- ✨ Moon hemisphere rotation based on latitude
+
+---
+
+## 🔧 Installation
+
+### Via HACS
+1. Open HACS → Frontend
+2. Search for **Nimbus Weather Card**
+3. Click **Download**
+4. Refresh your browser after installation
+
+### Manual
+1. Download `nimbus-weather-card.js`
+2. Copy to `/config/www/nimbus-weather-card.js`
+3. Add as a custom resource: `Settings → Dashboards → Resources → Add`
+   - URL: `/local/nimbus-weather-card.js`
+   - Type: JavaScript module
 
 ---
 
 ## ⚙️ Configuration
 
-### Minimal
-
 ```yaml
 type: custom:nimbus-weather-card
-entity: weather.home
+entity: weather.forecast_home
+sun_entity: sun.sun          # optional but recommended
+moon_entity: sensor.moon     # optional, for moon phases
+language: en                 # en | es | de | nl
+show_clock: true             # optional clock/date panel
+tap_action:
+  action: navigate
+  navigation_path: /lovelace/weather
 ```
 
-### Full options
+### All options
 
-```yaml
-type: custom:nimbus-weather-card
-entity: weather.home                      # required
-name: "Athens"                            # optional – display name
-forecast_type: daily                      # "daily" or "hourly"
-max_items: 5                              # number of forecast days/hours (1-7)
-show_forecast: true                       # show forecast strip (false = show local sensors)
-show_details: true                        # show humidity/wind/pressure
-show_feels_like: true                     # show feels‑like temperature
-temperature_unit: C                       # "C" or "F"
-use_24h: true                             # 24h format for hourly forecast
-animation_speed: 1                        # 0 = off, 1 = normal, 2 = fast
-sun_entity: sun.sun                       # for precise day/night (optional)
-moon_entity: sensor.moon_phase            # for sensor-based moon phases (optional)
-local_sensors:                            # shown when show_forecast: false
-  - entity: sensor.bedroom_temperature
-    icon: mdi:thermometer
-    name: Bedroom
-  - entity: sensor.living_room_humidity
-    icon: mdi:water-percent
-    name: Living Room
-```
-
-### Options table
-
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `entity` | string | **required** | Your weather entity ID |
-| `name` | string | friendly_name | Custom header text |
-| `forecast_type` | string | `daily` | `daily` or `hourly` |
-| `max_items` | number | `5` | Max forecast items (1–7) |
-| `show_forecast` | boolean | `true` | Show forecast strip |
-| `show_details` | boolean | `true` | Show humidity, wind, pressure |
-| `show_feels_like` | boolean | `true` | Show "Feels like" temperature |
-| `temperature_unit` | string | `C` | `C` or `F` |
-| `use_24h` | boolean | `true` | 24h time for hourly forecast |
-| `animation_speed` | number | `1` | Speed factor (0 = off) |
-| `sun_entity` | string | null | e.g. `sun.sun` |
-| `moon_entity` | string | null | e.g. `sensor.moon_phase` |
-| `local_sensors` | list | `[]` | Up to 4 local sensors (when forecast off) |
+| Option | Default | Description |
+|---|---|---|
+| `entity` | required | Your weather entity |
+| `sun_entity` | `sun.sun` | For accurate day/night detection |
+| `moon_entity` | — | Moon phase sensor |
+| `language` | `en` | `en`, `es`, `de`, `nl` |
+| `show_clock` | `false` | Show clock & date panel |
+| `show_details` | `true` | Show humidity, wind, pressure |
+| `tap_action` | more-info | Standard HA tap action |
+| `ufo_easter_egg` | `false` | 🛸 You'll know when you see it |
+| `latitude_zone` | — | `arctic` for aurora borealis on clear nights |
 
 ---
 
-## 🌡️ Local Sensors
+## 🌍 Add your language
 
-When `show_forecast: false`, the card shows a local sensor panel instead of the forecast strip. Up to 4 sensors are supported, each with a custom MDI icon and optional label.
-
-```yaml
-show_forecast: false
-local_sensors:
-  - entity: sensor.bedroom_temperature
-    icon: mdi:thermometer
-    name: Bedroom
-  - entity: sensor.co2_level
-    icon: mdi:molecule-co2
-    name: CO₂
-  - entity: sensor.power_consumption
-    icon: mdi:lightning-bolt
-    name: Power
-```
-
-> All icon packs installed via HACS are supported — use any `mdi:` or custom icon.
-
-> The visual config editor lets you add sensors with a **+** button and disable them instantly by turning forecast back on — your sensor settings are preserved.
+Translations are just a few lines of JSON. Open a Pull Request!  
+See existing translations in the source for the format.
 
 ---
 
-## 🌙 Moon phases
+## 🐛 Bugs & Feature Requests
 
-Moon phases are **auto‑calculated from the date** — no sensor required. For higher accuracy, add a moon sensor:
-
-```yaml
-moon_entity: moon.moon
-```
-
-Install the built-in [Moon Integration](https://www.home-assistant.io/integrations/moon/) and the card will use it automatically.
+Open an issue on [GitHub](https://github.com/maxfok/nimbus-weather-card/issues) or comment on the [HA Community thread](https://community.home-assistant.io/t/nimbus-weather-card/997259).
 
 ---
 
-## ☀️ Sun entity
+## ❤️ Support
 
-For exact sunrise/sunset timing and elevation‑based colours:
-
-```yaml
-sun_entity: sun.sun
-```
-
-If omitted, the card falls back to clock‑based day/night detection.
-
----
-
-## 📱 Examples
-
-### Simple daily forecast
-
-```yaml
-type: custom:nimbus-weather-card
-entity: weather.openweathermap
-max_items: 5
-```
-
-### Night‑optimised with moon
-
-```yaml
-type: custom:nimbus-weather-card
-entity: weather.home
-sun_entity: sun.sun
-moon_entity: moon.moon
-show_details: false
-```
-
-### Local sensors instead of forecast
-
-```yaml
-type: custom:nimbus-weather-card
-entity: weather.home
-show_forecast: false
-local_sensors:
-  - entity: sensor.bedroom_temperature
-    icon: mdi:thermometer
-    name: Bedroom
-  - entity: sensor.living_room_humidity
-    icon: mdi:water-percent
-    name: Humidity
-```
-
-### Fahrenheit
-
-```yaml
-type: custom:nimbus-weather-card
-entity: weather.weatherkit
-temperature_unit: F
-```
-
----
-
-## 🧠 Notes
-
-- The card respects your HA unit system for wind speed — no extra config needed.
-- Lightning bolts and screen droplets appear only during rainy/stormy conditions.
-- All animations can be disabled with `animation_speed: 0`.
-- The card appears in the **Add Card** menu and supports the full visual config editor.
-
----
-
-## 🐞 Troubleshooting
-
-| Issue | Solution |
-|---|---|
-| Card not in Add Card menu | Clear browser cache and reload |
-| Forecast not updating | Check `forecast_type` matches your weather platform |
-| Local sensors not showing | Set `show_forecast: false` |
-| Icons not showing | Verify `mdi:` prefix and icon name |
-| Particles too heavy | Set `animation_speed: 0` |
-
----
-
-## 🙏 Credits
-
-Inspired by [Apple Weather](https://apps.apple.com/app/weather/id1069513131) and the amazing Home Assistant community.  
-Moon crater SVG originally from [Vecteezy](https://www.vecteezy.com), adapted for dynamic sizing.
-
----
-
-⭐ If you like this card, consider giving it a star on GitHub!
-
----
-
-## ☕ Support
-
-[![Buy Me A Beer](https://img.shields.io/badge/Buy%20Me%20a%20Beer-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/max_fok)
-
-![QR Code](qr-code.png)
+If you like Nimbus, consider giving it a ⭐ on GitHub!
