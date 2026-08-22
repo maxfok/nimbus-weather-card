@@ -1,6 +1,6 @@
 # 🌦️ Nimbus Weather Card
 
-![Nimbus Weather Card](https://raw.githubusercontent.com/maxfok/nimbus-weather-card/main/media/nimbus-weather-card-demo.gif?v=2.5.0)
+![Nimbus Weather Card](https://raw.githubusercontent.com/maxfok/nimbus-weather-card/main/media/nimbus-weather-card-demo.gif?v=2.5.1)
 
 A beautiful, Apple Weather‑inspired custom card for Home Assistant with multi-source weather tabs, smooth particle effects, dynamic backgrounds, and detailed moon phase support.
 
@@ -9,7 +9,11 @@ A beautiful, Apple Weather‑inspired custom card for Home Assistant with multi-
 
 ---
 
-## 🆕 What's new in v2.5.0
+## 🆕 What's new in v2.5.1
+
+v2.5.1 is a documentation-only hotfix that refreshes the HACS README demo GIF.
+
+## What's new in v2.5.0
 
 v2.5.0 brings the Nimbus Weather Card's source-aware weather experience, clock controls, lunar atmosphere, and motion controls into one public release.
 
@@ -204,6 +208,9 @@ On clear nights, a random star detaches and streaks diagonally across the sky ev
 ---
 
 ## 📋 Changelog
+
+### v2.5.1
+- 📖 Documentation-only hotfix — refreshed the HACS README demo GIF
 
 ### v2.5.0
 - 🗺️ Source-local IANA time zones and optional exact source locations for the clock, forecast context, and sky calculations

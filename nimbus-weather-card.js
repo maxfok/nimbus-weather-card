@@ -1,4 +1,4 @@
-// Nimbus Weather Card v2.5.0
+// Nimbus Weather Card v2.5.1
 // https://github.com/maxfok/nimbus-weather-card
 // (c) 2024 Gerasimos Fokaefs — MIT License
 
@@ -11055,7 +11055,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
 
     return `
     <div class="section source-section">
-      <div class="section-title">Weather Sources <span class="section-pill">2.5.0</span></div>
+      <div class="section-title">Weather Sources <span class="section-pill">2.5.1</span></div>
       <div class="source-help">Add multiple weather integrations or keep a local station as a separate tab. If this list is empty, the legacy Weather Entity below is used.</div>
       ${
         sources.length
