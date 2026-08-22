@@ -1,6 +1,6 @@
 # 🌦️ Nimbus Weather Card
 
-![Nimbus Weather Card](media/nimbus-weather-card-demo.gif)
+![Nimbus Weather Card](https://raw.githubusercontent.com/maxfok/nimbus-weather-card/main/media/nimbus-weather-card-demo.gif?v=2.5.0)
 
 A beautiful, Apple Weather‑inspired custom card for Home Assistant with multi-source weather tabs, smooth particle effects, dynamic backgrounds, and detailed moon phase support.
 
