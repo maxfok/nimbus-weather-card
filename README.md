@@ -9,6 +9,35 @@ A beautiful, Apple Weather‑inspired custom card for Home Assistant with multi-
 
 ---
 
+## 🆕 What's new in v2.5.0
+
+v2.5.0 brings the Nimbus Weather Card's source-aware weather experience, clock controls, lunar atmosphere, and motion controls into one public release.
+
+### 🗺️ Source-local time and sky
+
+- Configure an optional IANA time zone globally or per weather source.
+- Source-local time now drives the optional clock, hourly forecast start, daily range, and solar/lunar context, with safe fallback to the browser time zone.
+- Source locations can provide precise solar and lunar context without changing forecast data semantics.
+
+### 🌙 Refined lunar atmosphere
+
+- The hero moon, forecast moons, and night sky use the same continuous astronomical phase model.
+- Moonlight, bloom, and clear-night sky treatment transition smoothly through the evening and preserve hemisphere-aware orientation.
+
+### 🎛️ Card and editor polish
+
+- Choose automatic, rounded, or square corners; automatic mode recognises Fully Kiosk only through its official interface.
+- The editor supports richer local-station source configuration, including source display options and time-zone selection.
+- The Animations control reliably pauses weather motion while retaining a static lightning bolt and the correct cloud state.
+
+### 🔧 Reliability
+
+- Forecast subscriptions are isolated per active source and stale asynchronous subscriptions are cleaned up.
+- Temperature conversion and observed daily high/low handling consistently use the active source's units and local day.
+- Canvas and UFO animation lifecycles use independent animation-frame handles.
+
+---
+
 ## ✨ Features
 
 - **Multi-source weather tabs** – display multiple weather integrations, locations, or local stations in one card
@@ -24,6 +53,31 @@ A beautiful, Apple Weather‑inspired custom card for Home Assistant with multi-
 - **Custom tap action** – navigate, call-service, url, or more-info
 - **Clock & date panel** – optional, togglable
 - **HACS compatible** – one-click install from HACS
+
+---
+
+## 🆕 What's new in v2.4.2
+
+v2.4.2 is a focused polish release for the v2.4.x visual and forecast stack.
+
+It improves the daily high/low display, brings forecast moon icons visually closer to the large moon, and refines the aurora effect into a softer two-layer curtain with green and cyan light.
+
+### 🌡️ Stable daily high/low
+
+- Daily high/low values are now stabilized from the daily forecast range seen during the day.
+- Nimbus keeps the widest valid daily forecast range it has seen for the active source/date, instead of letting the low follow the current or remaining hourly forecast.
+- Temporary invalid restart/update ranges such as `27° / 27°` are ignored when better daily data is already available.
+
+### 🌙 Moon icon polish
+
+- Forecast and modal moon icons now use a grey moon palette to better match the large moon rendering.
+- The existing phase/terminator mechanism remains unchanged, so the icons keep the same phase logic while looking less yellow.
+
+### 🌌 Aurora polish
+
+- Aurora rendering has been reworked into a layered cyan-and-green curtain.
+- The effect now sits slightly higher in the sky and uses a larger curved motion inspired by the earlier v2.3.3 aurora flow.
+- Pink/purple mass has been removed in favour of cyan, tea-mint, and aurora-green blending.
 
 ---
 
@@ -150,6 +204,18 @@ On clear nights, a random star detaches and streaks diagonally across the sky ev
 ---
 
 ## 📋 Changelog
+
+### v2.5.0
+- 🗺️ Source-local IANA time zones and optional exact source locations for the clock, forecast context, and sky calculations
+- 🌙 Unified astronomical moon phase and lunar-atmosphere rendering across hero and forecast views
+- 🎛️ Corner-style choices, richer local-station editor controls, and reliable animation pausing
+- 🔧 Source-safe forecast subscriptions, active-source temperature units, daily range handling, and independent animation cleanup
+
+### v2.4.2
+- 🌡️ **Stable daily range** — daily high/low now preserves the widest valid daily forecast range seen for the source/date instead of following current or remaining hourly temperatures
+- 🌙 **Grey moon forecast icons** — forecast and modal moon icons now better match the large grey moon while keeping the existing phase/terminator logic
+- 🌌 **Aurora curtain polish** — reworked aurora into a higher cyan/green layered curtain with larger curved motion and no pink/purple mass
+- 🐛 **Restart range guard** — temporary invalid daily ranges during Home Assistant restarts/updates are ignored when stable daily data is already available
 
 ### v2.4.1
 - 🐛 **Condition normalization** — common condition sensor variants now map to the intended Nimbus weather states
