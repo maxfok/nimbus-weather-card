@@ -1,4 +1,4 @@
-// Nimbus Weather Card v2.5.1
+// Nimbus Weather Card v2.6.0
 // https://github.com/maxfok/nimbus-weather-card
 // (c) 2024 Gerasimos Fokaefs — MIT License
 
@@ -2210,6 +2210,73 @@ function _cornerStyleConfigValue(value) {
   return NIMBUS_CORNER_STYLES.includes(value) ? value : 'auto';
 }
 
+// Reading direction is a presentation concern and deliberately remains
+// independent from Nimbus's small translation catalog. `auto` follows Home
+// Assistant (or, as a fallback, the surrounding document) while explicit
+// values make mixed-direction dashboards deterministic.
+const NIMBUS_DIRECTIONS = Object.freeze(['auto', 'ltr', 'rtl']);
+
+function _directionConfigValue(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return NIMBUS_DIRECTIONS.includes(normalized) ? normalized : 'auto';
+}
+
+function _normalizedDirection(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return normalized === 'rtl' || normalized === 'ltr' ? normalized : null;
+}
+
+function _resolvedTextDirection(value, hass = null, element = null) {
+  const requested = _directionConfigValue(value);
+  if (requested !== 'auto') return requested;
+
+  const locale = hass?.locale || {};
+  const homeAssistantDirection =
+    _normalizedDirection(locale.text_direction) ||
+    _normalizedDirection(locale.textDirection) ||
+    _normalizedDirection(locale.direction) ||
+    _normalizedDirection(locale.dir);
+  if (homeAssistantDirection) return homeAssistantDirection;
+
+  const ownerDocument =
+    element?.ownerDocument || (typeof document !== 'undefined' ? document : null);
+
+  // Follow the actual Home Assistant/container presentation before guessing
+  // from a language code. Reading the parent (rather than this host) avoids a
+  // previously resolved `dir` attribute feeding back into a later `auto`
+  // resolution and also supports an RTL card inside a locally directed view.
+  try {
+    const view = ownerDocument?.defaultView;
+    const inheritedTarget = element?.parentElement || ownerDocument?.documentElement;
+    const computedDirection = _normalizedDirection(
+      view?.getComputedStyle?.(inheritedTarget)?.direction,
+    );
+    if (computedDirection) return computedDirection;
+  } catch (_err) {}
+
+  const documentDirection = _normalizedDirection(
+    ownerDocument?.documentElement?.getAttribute?.('dir'),
+  );
+  if (documentDirection) return documentDirection;
+
+  const language = String(
+    locale.language || hass?.language || ownerDocument?.documentElement?.lang || '',
+  ).trim();
+  if (language) {
+    try {
+      const localeDirection = _normalizedDirection(
+        new Intl.Locale(language).textInfo?.direction,
+      );
+      if (localeDirection) return localeDirection;
+    } catch (_err) {}
+    // Older embedded WebViews may not expose Intl.Locale#textInfo.
+    if (/^(?:ar|arc|ckb|dv|fa|he|ks|ku|nqo|ps|sd|ug|ur|yi)(?:-|$)/i.test(language)) {
+      return 'rtl';
+    }
+  }
+  return 'ltr';
+}
+
 // Fully Kiosk documents this global as its JavaScript Interface identity
 // marker. It is deliberately a no-call feature check: Nimbus neither reads
 // device data nor asks users to enable the bridge just for card styling.
@@ -2254,6 +2321,10 @@ function _sourceDisplayDefaultsFromConfig(config = {}) {
     forecast_type: config.forecast_type === 'hourly' ? 'hourly' : 'daily',
     max_items: Number.isFinite(maxItems) ? Math.max(1, Math.min(7, maxItems)) : 5,
     show_forecast: _boolConfigValue(config.show_forecast, true),
+    show_precipitation_probability: _boolConfigValue(
+      config.show_precipitation_probability,
+      false,
+    ),
     show_details: _boolConfigValue(config.show_details, true),
     show_clock: _boolConfigValue(config.show_clock, false),
     use_24h: _boolConfigValue(config.use_24h, true),
@@ -2303,12 +2374,19 @@ function _sourceWithDisplayDefaults(source = {}, config = {}) {
     ? Math.max(1, Math.min(7, maxItems))
     : defaults.max_items;
   next.show_forecast = _boolConfigValue(next.show_forecast, defaults.show_forecast);
+  next.show_precipitation_probability = _boolConfigValue(
+    next.show_precipitation_probability,
+    defaults.show_precipitation_probability,
+  );
   next.show_details = _boolConfigValue(next.show_details, defaults.show_details);
   next.show_clock = _boolConfigValue(next.show_clock, defaults.show_clock);
   next.use_24h = _boolConfigValue(next.use_24h, defaults.use_24h);
   next.wind_unit = next.wind_unit === 'beaufort' ? 'beaufort' : 'kmh';
   return next;
 }
+
+const NIMBUS_MAX_SUPPLEMENTAL_SENSORS = 5;
+const NIMBUS_SUPPLEMENT_DISCOVERY_DELAY_MS = 4500;
 
 class NimbusWeatherCard extends HTMLElement {
   static getStubConfig(hass) {
@@ -2422,6 +2500,23 @@ class NimbusWeatherCard extends HTMLElement {
     this._stormLightTimer = null;
     this._lastModalTrigger = null;
     this._activeSourceId = null;
+    this._pendingSourceTabFocusId = null;
+    // Carousel state lives outside the rendered DOM. Source switches rebuild
+    // weather content without discarding either per-source page selection.
+    this._carouselPages = new Map();
+    this._carouselStorageKey = null;
+    this._carouselSuppressClickUntil = 0;
+    this._carouselResizeObserver = null;
+    this._supplementSelections = new Map();
+    this._supplementTimer = null;
+    this._supplementTimerPhase = null;
+    this._supplementDiscoveryDone = false;
+    this._supplementSource = null;
+    this._supplementCandidates = [];
+    this._supplementWindow = null;
+    this._supplementGesture = null;
+    this._supplementMotionQuery = null;
+    this._onSupplementVisibilityChange = () => this._syncSupplementDiscovery();
     this._lastTemporalRenderKey = null;
     this._observedRangeCache = new Map();
     this._observedRangePending = new Set();
@@ -2495,6 +2590,9 @@ class NimbusWeatherCard extends HTMLElement {
     this._normalizeSources().forEach((source) => {
       add(source.entity);
       add(source.reference_entity);
+      (Array.isArray(source.local_sensors) ? source.local_sensors : []).forEach((sensor) =>
+        add(sensor?.entity),
+      );
       NIMBUS_LOCAL_SENSOR_KEYS.forEach((key) => {
         add(source[key]);
         add(source[key.replace(/^local_/, '')]);
@@ -2520,6 +2618,7 @@ class NimbusWeatherCard extends HTMLElement {
   set hass(hass) {
     const previous = this._hass;
     this._hass = hass;
+    this._syncDirection();
     if (!hass || !this._config) return;
     // Always refresh the snapshot, even when we bail out, so the next update
     // is compared against what we last saw rather than what we last rendered.
@@ -2540,6 +2639,7 @@ class NimbusWeatherCard extends HTMLElement {
     const textSize = _textSizeConfigValue(config.text_size);
     const cardHeight = _cardHeightConfigValue(config.card_height);
     const cornerStyle = _cornerStyleConfigValue(config.corner_style);
+    const direction = _directionConfigValue(config.direction);
     if (!config.entity && !config.local_weather_station && !hasSources)
       throw new Error('Please define a weather entity');
     const sources = hasSources
@@ -2561,6 +2661,10 @@ class NimbusWeatherCard extends HTMLElement {
       forecast_type: config.forecast_type || 'daily',
       max_items: config.max_items || 5,
       show_forecast: config.show_forecast !== false,
+      show_precipitation_probability: _boolConfigValue(
+        config.show_precipitation_probability,
+        false,
+      ),
       show_details: config.show_details !== false,
       name: config.name || null,
       sun_entity: config.sun_entity || null,
@@ -2569,6 +2673,7 @@ class NimbusWeatherCard extends HTMLElement {
       animation_speed: config.animation_speed ?? 1,
       feels_like_entity: config.feels_like_entity ?? '',
       language: config.language || 'en',
+      direction,
       text_size: textSize,
       card_height: cardHeight,
       corner_style: cornerStyle,
@@ -2592,6 +2697,7 @@ class NimbusWeatherCard extends HTMLElement {
     };
     this.setAttribute?.('data-text-size', textSize);
     this.setAttribute?.('data-card-height', cardHeight);
+    this._syncDirection();
     this._syncCornerStyle();
     // Legacy moon_entity configs are intentionally ignored. Lunar geometry is
     // derived from each render timestamp so hero and forecast cannot diverge.
@@ -2630,6 +2736,38 @@ class NimbusWeatherCard extends HTMLElement {
 
   _syncCornerStyle() {
     this.setAttribute?.('data-corner-style', this._resolvedCornerStyle());
+  }
+
+  _resolvedDirection() {
+    return _resolvedTextDirection(this._config?.direction, this._hass, this);
+  }
+
+  _syncDirection() {
+    const direction = this._resolvedDirection();
+    const changed = this.getAttribute?.('dir') !== direction;
+    this.setAttribute?.('dir', direction);
+    this.setAttribute?.('data-direction', direction);
+    if (changed && this._supplementWindow?.isConnected) this._settleSupplementPage();
+    return changed;
+  }
+
+  _isRtl() {
+    return (this.getAttribute?.('dir') || this._resolvedDirection()) === 'rtl';
+  }
+
+  _supplementTrackOffset(start) {
+    const magnitude = (Number(start) || 0) * 100 / 3;
+    return (this._isRtl() ? 1 : -1) * magnitude;
+  }
+
+  _horizontalGestureStep(deltaX) {
+    return deltaX * (this._isRtl() ? 1 : -1) > 0 ? 1 : -1;
+  }
+
+  _horizontalKeyStep(key) {
+    if (key !== 'ArrowLeft' && key !== 'ArrowRight') return 0;
+    const physicalStep = key === 'ArrowRight' ? 1 : -1;
+    return physicalStep * (this._isRtl() ? -1 : 1);
   }
 
   _setHostBooleanAttribute(name, active) {
@@ -2671,7 +2809,21 @@ class NimbusWeatherCard extends HTMLElement {
 
   _panelFillSceneHeight() {
     const content = this.shadowRoot?.getElementById('ct');
-    const contentHeight = Math.max(content?.scrollHeight || 0, content?.offsetHeight || 0);
+    let contentHeight = Math.max(content?.scrollHeight || 0, content?.offsetHeight || 0);
+    if (content && this._panelFillActive) {
+      // In Panel Fill, #ct itself is stretched to the card height. Measure the
+      // intrinsic blocks instead so ResizeObserver never feeds that stretched
+      // height back into the short-panel guard or the sun/moon optics bounds.
+      const view = content.ownerDocument?.defaultView || globalThis;
+      const style = view?.getComputedStyle?.(content);
+      const paddingTop = Number.parseFloat(style?.paddingTop) || 0;
+      const paddingBottom = Number.parseFloat(style?.paddingBottom) || 0;
+      const childrenHeight = Array.from(content.children || []).reduce(
+        (height, child) => height + Math.max(child?.scrollHeight || 0, child?.offsetHeight || 0),
+        0,
+      );
+      contentHeight = paddingTop + childrenHeight + paddingBottom;
+    }
     return Math.max(170, Math.ceil(contentHeight));
   }
 
@@ -2697,7 +2849,13 @@ class NimbusWeatherCard extends HTMLElement {
     const observer = this._panelFillObserver;
     if (!observer) return;
     observer.disconnect();
-    [panel, this.shadowRoot?.getElementById('ct'), this.shadowRoot?.getElementById('source-tabs-slot')]
+    [
+      panel,
+      this.shadowRoot?.getElementById('ct'),
+      this.shadowRoot?.getElementById('source-tabs-slot'),
+      this.shadowRoot?.getElementById('carousel-hero'),
+      this.shadowRoot?.getElementById('carousel-lower'),
+    ]
       .filter(Boolean)
       .forEach((target) => observer.observe(target));
   }
@@ -2819,7 +2977,9 @@ class NimbusWeatherCard extends HTMLElement {
         return !!(
           source.reference_entity ||
           source.entity ||
-          NIMBUS_LOCAL_SENSOR_KEYS.some((key) => source[key] || source[key.replace(/^local_/, '')])
+          NIMBUS_LOCAL_SENSOR_KEYS.some(
+            (key) => source[key] || source[key.replace(/^local_/, '')],
+          )
         );
       });
   }
@@ -2832,23 +2992,72 @@ class NimbusWeatherCard extends HTMLElement {
     );
   }
 
+  _sourceSetStorageKey(namespace, sourceIds, preserveOrder = false) {
+    const ids = (Array.isArray(sourceIds) ? sourceIds : [])
+      .map((id) => String(id || ''))
+      .filter(Boolean);
+    if (!ids.length) return null;
+    const path = window.location?.pathname || 'dashboard';
+    const keyIds = preserveOrder ? ids : [...ids].sort();
+    return `nimbus-weather-card:${namespace}:${path}:${keyIds.join('|')}`;
+  }
+
+  _legacySourceSetStorageKeys(namespace, sourceIds) {
+    const ids = (Array.isArray(sourceIds) ? sourceIds : [])
+      .map((id) => String(id || ''))
+      .filter(Boolean);
+    const primaryKey = this._sourceSetStorageKey(namespace, ids);
+    if (!primaryKey) return [];
+
+    const legacyKeys = new Set();
+    const orderedKey = this._sourceSetStorageKey(namespace, ids, true);
+    if (orderedKey && orderedKey !== primaryKey) legacyKeys.add(orderedKey);
+
+    // The previous key encoded tab order. Inspect matching keys so a user can
+    // upgrade and reorder in the same reload without losing saved state. Keep
+    // the old entry intact as a rollback path after copying it forward.
+    try {
+      const storage = window.localStorage;
+      const path = window.location?.pathname || 'dashboard';
+      const prefix = `nimbus-weather-card:${namespace}:${path}:`;
+      const signature = [...ids].sort().join('|');
+      for (let index = 0; index < (storage?.length || 0); index += 1) {
+        const candidate = storage.key(index);
+        if (!candidate || candidate === primaryKey || !candidate.startsWith(prefix)) continue;
+        const candidateIds = candidate.slice(prefix.length).split('|');
+        if (
+          candidateIds.length === ids.length &&
+          [...candidateIds].sort().join('|') === signature
+        ) {
+          legacyKeys.add(candidate);
+        }
+      }
+    } catch (err) {}
+    return [...legacyKeys];
+  }
+
   _sourceStorageKey(sources = this._normalizeSources()) {
     if (!Array.isArray(sources) || !sources.length) return null;
-    const path = window.location?.pathname || 'dashboard';
     const ids = sources
       .map((source) => source.id)
-      .filter(Boolean)
-      .join('|');
-    if (!ids) return null;
-    return `nimbus-weather-card:active-source:${path}:${ids}`;
+      .filter(Boolean);
+    return this._sourceSetStorageKey('active-source', ids);
   }
 
   _storedSourceId(sources = this._normalizeSources()) {
     try {
       const key = this._sourceStorageKey(sources);
       if (!key) return null;
-      const id = window.localStorage?.getItem(key);
-      return id && sources.some((source) => source.id === id) ? id : null;
+      const sourceIds = sources.map((source) => source.id).filter(Boolean);
+      const storedId = window.localStorage?.getItem(key);
+      if (storedId && sources.some((source) => source.id === storedId)) return storedId;
+      for (const candidate of this._legacySourceSetStorageKeys('active-source', sourceIds)) {
+        const id = window.localStorage?.getItem(candidate);
+        if (!id || !sources.some((source) => source.id === id)) continue;
+        window.localStorage?.setItem(key, id);
+        return id;
+      }
+      return null;
     } catch (err) {
       return null;
     }
@@ -3029,6 +3238,14 @@ class NimbusWeatherCard extends HTMLElement {
         _sourceDisplayValue(source, 'show_forecast', defaults.show_forecast),
         true,
       ),
+      show_precipitation_probability: _boolConfigValue(
+        _sourceDisplayValue(
+          source,
+          'show_precipitation_probability',
+          defaults.show_precipitation_probability,
+        ),
+        false,
+      ),
       show_details: _boolConfigValue(
         _sourceDisplayValue(source, 'show_details', defaults.show_details),
         true,
@@ -3058,7 +3275,7 @@ class NimbusWeatherCard extends HTMLElement {
                     this._firstWeatherSourceEntity(ctx.sources)
                 ],
           );
-          return `<button type="button" class="source-tab${active ? ' active' : ''}" data-source-id="${this._escapeHtml(source.id)}" role="tab" aria-selected="${active ? 'true' : 'false'}">${this._escapeHtml(label)}</button>`;
+          return `<button type="button" class="source-tab${active ? ' active' : ''}" data-source-id="${this._escapeHtml(source.id)}" role="tab" aria-selected="${active ? 'true' : 'false'}" tabindex="${active ? '0' : '-1'}" dir="auto">${this._escapeHtml(label)}</button>`;
         })
         .join('')}
     </div>`;
@@ -3067,21 +3284,63 @@ class NimbusWeatherCard extends HTMLElement {
   _attachSourceTabHandlers() {
     const tabs = this.shadowRoot?.querySelectorAll('.source-tab[data-source-id]');
     if (!tabs?.length) return;
+    const tabList = [...tabs];
+    const activate = (tab, preserveFocus = false) => {
+      const id = tab?.dataset?.sourceId;
+      if (!id) return;
+      if (preserveFocus) this._pendingSourceTabFocusId = id;
+      if (id === this._activeSourceId) {
+        if (preserveFocus) tab.focus({ preventScroll: true });
+        this._pendingSourceTabFocusId = null;
+        return;
+      }
+      this._activeSourceId = id;
+      this._storeSourceId(id);
+      this._lastParticleKey = null;
+      this._cloudKey = null;
+      this._haptic('selection');
+      this._render();
+    };
+    const focusTab = (tab) => {
+      if (!tab) return;
+      tabList.forEach((candidate) => {
+        candidate.tabIndex = candidate === tab ? 0 : -1;
+      });
+      tab.focus({ preventScroll: true });
+      tab.scrollIntoView?.({ inline: 'nearest', block: 'nearest' });
+    };
     tabs.forEach((tab) => {
       if (tab._nimbusHandled) return;
       tab._nimbusHandled = true;
       tab.addEventListener('click', (e) => {
         e.stopPropagation();
-        const id = tab.dataset.sourceId;
-        if (!id || id === this._activeSourceId) return;
-        this._activeSourceId = id;
-        this._storeSourceId(id);
-        this._lastParticleKey = null;
-        this._cloudKey = null;
-        this._haptic('selection');
-        this._render();
+        activate(tab);
+      });
+      tab.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          event.stopPropagation();
+          activate(tab, true);
+          return;
+        }
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const current = Math.max(0, tabList.indexOf(tab));
+        let next = current;
+        if (event.key === 'Home') next = 0;
+        else if (event.key === 'End') next = tabList.length - 1;
+        else next = (current + this._horizontalKeyStep(event.key) + tabList.length) % tabList.length;
+        focusTab(tabList[next]);
       });
     });
+    if (this._pendingSourceTabFocusId) {
+      const pending = tabList.find(
+        (tab) => tab.dataset.sourceId === this._pendingSourceTabFocusId,
+      );
+      this._pendingSourceTabFocusId = null;
+      focusTab(pending);
+    }
   }
 
   // Επιστρέφει ταχύτητα ανέμου και μονάδα από το HA state
@@ -3161,6 +3420,16 @@ class NimbusWeatherCard extends HTMLElement {
     // Fully injects its identity bridge at page level. Re-resolve on connect
     // as well as config changes so a preconfigured card gets the right edge.
     this._syncCornerStyle();
+    this._syncDirection();
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this._onSupplementVisibilityChange);
+    }
+    this._supplementMotionQuery =
+      typeof window !== 'undefined'
+        ? window.matchMedia?.('(prefers-reduced-motion: reduce)') || null
+        : null;
+    this._supplementMotionQuery?.addEventListener?.('change', this._onSupplementVisibilityChange);
+    this._syncSupplementDiscovery();
     if (typeof document !== 'undefined' && !this._lunarVisibilityListening) {
       document.addEventListener('visibilitychange', this._onLunarVisibilityChange);
       this._lunarVisibilityListening = true;
@@ -3195,6 +3464,17 @@ class NimbusWeatherCard extends HTMLElement {
   }
 
   disconnectedCallback() {
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this._onSupplementVisibilityChange);
+    }
+    this._supplementMotionQuery?.removeEventListener?.(
+      'change',
+      this._onSupplementVisibilityChange,
+    );
+    this._supplementMotionQuery = null;
+    this._supplementGesture = null;
+    this._clearSupplementTimer();
+    this._settleSupplementPage();
     if (typeof document !== 'undefined' && this._lunarVisibilityListening) {
       document.removeEventListener('visibilitychange', this._onLunarVisibilityChange);
       this._lunarVisibilityListening = false;
@@ -3246,6 +3526,8 @@ class NimbusWeatherCard extends HTMLElement {
     }
     this._panelFillObserver?.disconnect?.();
     this._panelFillObserver = null;
+    this._carouselResizeObserver?.disconnect?.();
+    this._carouselResizeObserver = null;
     this._clearPanelFillState();
     this._unsubscribeForecasts();
     this._destroyUfo();
@@ -6662,9 +6944,11 @@ class NimbusWeatherCard extends HTMLElement {
     this._lastModalTrigger = triggerEl || this.shadowRoot?.activeElement || null;
     backdrop.classList.add('open');
     modal.classList.add('open');
+    modal.inert = false;
     this._lastModalTrigger?.setAttribute?.('aria-expanded', 'true');
     backdrop.setAttribute('aria-hidden', 'false');
     modal.setAttribute('aria-hidden', 'false');
+    this._syncSupplementDiscovery();
     if (!wasOpen) {
       this._haptic('selection');
       requestAnimationFrame(() => modal.focus?.({ preventScroll: true }));
@@ -6676,9 +6960,11 @@ class NimbusWeatherCard extends HTMLElement {
     const wasOpen = !!modal?.classList.contains('open');
     backdrop?.classList.remove('open');
     modal?.classList.remove('open');
+    if (modal) modal.inert = true;
     this._lastModalTrigger?.setAttribute?.('aria-expanded', 'false');
     backdrop?.setAttribute('aria-hidden', 'true');
     modal?.setAttribute('aria-hidden', 'true');
+    this._syncSupplementDiscovery();
     if (wasOpen) {
       this._haptic(style);
       if (restoreFocus) {
@@ -7456,6 +7742,7 @@ class NimbusWeatherCard extends HTMLElement {
   --nimbus-text-detail:13px; --nimbus-detail-row-min-height:22px; --nimbus-detail-icon:20px;
   --nimbus-text-forecast-day:14px; --nimbus-text-forecast-temp:15px;
   --nimbus-text-forecast-low:13px; --nimbus-forecast-icon:32px;
+  --nimbus-text-forecast-precip:10px; --nimbus-forecast-precip-icon:11px;
   --nimbus-text-sun-label:9px; --nimbus-text-sun-toast:11px; --nimbus-text-cta:9px;
   --nimbus-text-modal-title:11px; --nimbus-text-modal-day:12px;
   --nimbus-text-modal-temp:12px; --nimbus-text-modal-low:11px;
@@ -7471,6 +7758,7 @@ class NimbusWeatherCard extends HTMLElement {
   --nimbus-text-detail:15px; --nimbus-detail-row-min-height:24px; --nimbus-detail-icon:22px;
   --nimbus-text-forecast-day:15px; --nimbus-text-forecast-temp:17px;
   --nimbus-text-forecast-low:14px; --nimbus-forecast-icon:34px;
+  --nimbus-text-forecast-precip:11px; --nimbus-forecast-precip-icon:12px;
   --nimbus-text-sun-label:10px; --nimbus-text-sun-toast:12px; --nimbus-text-cta:10px;
   --nimbus-text-modal-title:12px; --nimbus-text-modal-day:13px;
   --nimbus-text-modal-temp:13px; --nimbus-text-modal-low:12px;
@@ -7486,6 +7774,7 @@ class NimbusWeatherCard extends HTMLElement {
   --nimbus-text-detail:16px; --nimbus-detail-row-min-height:25px; --nimbus-detail-icon:24px;
   --nimbus-text-forecast-day:16px; --nimbus-text-forecast-temp:18px;
   --nimbus-text-forecast-low:15px; --nimbus-forecast-icon:36px;
+  --nimbus-text-forecast-precip:12px; --nimbus-forecast-precip-icon:13px;
   --nimbus-text-sun-label:11px; --nimbus-text-sun-toast:13px; --nimbus-text-cta:11px;
   --nimbus-text-modal-title:13px; --nimbus-text-modal-day:14px;
   --nimbus-text-modal-temp:14px; --nimbus-text-modal-low:13px;
@@ -7713,6 +8002,9 @@ class NimbusWeatherCard extends HTMLElement {
 
 /* ── CONTENT ── */
 .ct { position:relative; z-index:6; padding:18px; color:#fff; text-shadow:0 2px 4px rgba(0,0,0,0.35), 0 0 8px rgba(0,0,0,0.2) }
+:host([data-panel-fill-active]) .ct {
+  box-sizing:border-box; display:flex; flex:1 1 auto; flex-direction:column; width:100%; min-height:0;
+}
 .source-tabs-slot { display:block; width:100%; margin:0 0 10px; padding:0; overflow-anchor:none; }
 .source-tabs-slot[hidden] { display:none !important; }
 .source-tabs {
@@ -7746,7 +8038,7 @@ class NimbusWeatherCard extends HTMLElement {
 .entity-error { min-height:170px; display:flex; flex-direction:column; justify-content:center; gap:8px; }
 .entity-error-title { font-size:15px; font-weight:700; letter-spacing:.02em; }
 .entity-error-subtitle { font-size:12px; line-height:1.4; opacity:.75; max-width:260px; }
-.entity-error-code { font-size:11px; opacity:.65; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-word; }
+.entity-error-code { font-size:11px; opacity:.65; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-word; direction:ltr; unicode-bidi:isolate; text-align:start; }
 
 /* ── RAIN ── */
 /* far layer — small, slow, faint */
@@ -8167,7 +8459,9 @@ class NimbusWeatherCard extends HTMLElement {
 }
 :host([data-panel-fill-active]) .source-tabs-slot { flex:0 0 auto; }
 :host([data-panel-fill-active]) .card {
+  display:flex;
   flex:1 1 auto;
+  flex-direction:column;
   min-height:var(--nimbus-fill-scene-height,170px);
 }
 .card[data-hud-state="sunset"] {
@@ -8201,6 +8495,8 @@ class NimbusWeatherCard extends HTMLElement {
 .hd   { display:flex; justify-content:space-between; align-items:center; margin-bottom:4px }
 .loc  { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; opacity:.85 }
 .cnd  { font-size:11px; opacity:.7; text-transform:capitalize }
+.bidi-auto { unicode-bidi:isolate; }
+.bidi-ltr { direction:ltr; unicode-bidi:isolate; }
 .tmp  {
   width:max-content; font-size:62px; line-height:1; margin-bottom:2px;
   font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; font-weight:400;
@@ -8244,7 +8540,7 @@ class NimbusWeatherCard extends HTMLElement {
 .splash-layer { position:absolute; top:-22px; left:0; right:0; height:26px; pointer-events:none; overflow:visible; z-index:10; }
 .det-wrap { position:relative; margin-bottom:12px; overflow:visible; }
 .det-clock { display:flex; justify-content:space-between; padding-bottom:5px; font-size:12px; opacity:.9; letter-spacing:.02em; border-bottom:1px solid rgba(235,248,255,.13); margin-bottom:4px; min-height:1.4em; text-shadow:0 1px 2px rgba(0,16,45,.26); }
-.det-clock-time { font-size:13px; font-weight:600; }
+.det-clock-time { font-size:13px; font-weight:600; direction:ltr; unicode-bidi:isolate; }
 .det-clock-only { border-bottom:none; padding-bottom:0; margin-bottom:0; }
 /* The spacing between detail items lives in the row's column-gap, not in the
    items' own padding. Gaps apply only between items on the same line, so an
@@ -8257,7 +8553,7 @@ class NimbusWeatherCard extends HTMLElement {
   text-shadow:0 1px 2px rgba(0,16,45,.24);
 }
 .di + .di::before {
-  content:""; position:absolute; left:-12px; top:18%; width:1px; height:64%; pointer-events:none;
+  content:""; position:absolute; inset-inline-start:-12px; top:18%; width:1px; height:64%; pointer-events:none;
   background:linear-gradient(to bottom,transparent,rgba(235,248,255,.18) 24%,rgba(235,248,255,.18) 76%,transparent);
   box-shadow:1px 0 0 rgba(0,20,55,.055);
 }
@@ -8283,7 +8579,7 @@ class NimbusWeatherCard extends HTMLElement {
 .fc-expand-btn {
   appearance:none; -webkit-appearance:none;
   display:flex; align-items:center; justify-content:center; gap:4px;
-  width:max-content; min-height:24px; margin:7px 8px 0 auto; padding:3px 8px 3px 10px;
+  width:max-content; min-height:24px; margin-block:7px 0; margin-inline:auto 8px; padding-block:3px; padding-inline:10px 8px;
   border:1px solid rgba(255,255,255,0.13); border-radius:999px;
   background:linear-gradient(135deg,rgba(225,244,255,0.105),rgba(80,170,235,0.055));
   box-shadow:inset 0 1px 0 rgba(255,255,255,0.075),0 2px 9px rgba(0,35,85,0.085);
@@ -8306,7 +8602,7 @@ class NimbusWeatherCard extends HTMLElement {
 /* v2: Forecast modal */
 .fc-modal-backdrop { position:absolute; inset:0; z-index:20; background:rgba(50,40,75,0.18); border-radius:var(--nimbus-card-radius); backdrop-filter:blur(2px); opacity:0; pointer-events:none; transition:opacity 0.3s; }
 .fc-modal-backdrop.open { opacity:1; pointer-events:auto; touch-action:none; }
-.fc-modal { position:absolute; left:0; right:0; bottom:0; z-index:21; background:linear-gradient(180deg,rgba(70,55,95,0.42) 0%,rgba(45,42,80,0.55) 100%); backdrop-filter:blur(26px) saturate(1.35); -webkit-backdrop-filter:blur(26px) saturate(1.35); border:1px solid rgba(255,255,255,0.16); border-bottom:none; border-radius:var(--nimbus-card-radius); box-shadow:0 -12px 40px rgba(30,20,50,0.35); padding:0 0 16px; transform:translateY(100%); transition:transform 0.38s cubic-bezier(0.25,0.46,0.45,0.94); max-height:85%; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; touch-action:pan-y; outline:none; }
+.fc-modal { position:absolute; inset-inline:0; bottom:0; z-index:21; background:linear-gradient(180deg,rgba(70,55,95,0.42) 0%,rgba(45,42,80,0.55) 100%); backdrop-filter:blur(26px) saturate(1.35); -webkit-backdrop-filter:blur(26px) saturate(1.35); border:1px solid rgba(255,255,255,0.16); border-bottom:none; border-radius:var(--nimbus-card-radius); box-shadow:0 -12px 40px rgba(30,20,50,0.35); padding:0 0 16px; transform:translateY(100%); transition:transform 0.38s cubic-bezier(0.25,0.46,0.45,0.94); max-height:85%; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; touch-action:pan-y; outline:none; }
 .fc-modal.open { transform:translateY(0); }
 .fc-modal-handle, .fc-modal-header { touch-action:none; user-select:none; cursor:grab; }
 .fc-modal-handle { width:72px; height:22px; border-radius:999px; margin:3px auto 0; display:flex; align-items:center; justify-content:center; }
@@ -8316,12 +8612,13 @@ class NimbusWeatherCard extends HTMLElement {
 .fc-modal-row:hover { background:rgba(255,255,255,0.06); }
 .fc-modal-day  { font-size:12px; color:rgba(255,255,255,0.60); width:36px; font-variant-numeric:tabular-nums; }
 .fc-modal-icon { width:22px; height:22px; flex-shrink:0; }
-.fc-modal-lo   { font-size:11px; color:rgba(255,255,255,0.45); width:24px; text-align:right; }
-.fc-modal-hi   { font-size:12px; font-weight:600; width:24px; }
-.fc-modal-temp { font-size:12px; font-weight:600; width:32px; text-align:right; }
-.fc-modal-bar-bg { flex:1; height:6px; border-radius:3px; background:rgba(255,255,255,0.10); overflow:hidden; position:relative; }
+.fc-modal-range { direction:ltr; unicode-bidi:isolate; display:flex; align-items:center; gap:10px; flex:1; min-width:0; }
+.fc-modal-lo   { font-size:11px; color:rgba(255,255,255,0.45); width:24px; text-align:end; direction:ltr; unicode-bidi:isolate; }
+.fc-modal-hi   { font-size:12px; font-weight:600; width:24px; direction:ltr; unicode-bidi:isolate; }
+.fc-modal-temp { font-size:12px; font-weight:600; width:32px; text-align:end; direction:ltr; unicode-bidi:isolate; }
+.fc-modal-bar-bg { flex:1; height:6px; border-radius:3px; background:rgba(255,255,255,0.10); overflow:hidden; position:relative; direction:ltr; }
 .fc-modal-bar-fill { height:100%; border-radius:3px; background:linear-gradient(90deg,rgba(140,170,255,0.85),rgba(255,190,110,0.95)); box-shadow:0 0 8px rgba(255,190,110,0.35); }
-.fc-modal-precip { font-size:10px; color:rgba(99,179,237,0.65); width:28px; text-align:right; font-family:monospace; }
+.fc-modal-precip { font-size:10px; color:rgba(99,179,237,0.65); width:28px; text-align:end; font-family:monospace; direction:ltr; unicode-bidi:isolate; }
 .fc-modal-empty { padding:16px; font-size:12px; color:rgba(255,255,255,0.4); text-align:center; }
 .fc::-webkit-scrollbar { display:none }
 .fi   {
@@ -8331,7 +8628,7 @@ class NimbusWeatherCard extends HTMLElement {
 .fi + .fi::before {
   /* 1.5px straddling the boundary: a 1px line on a fractional flex edge can
      fall between device pixels and vanish — this always covers a full pixel. */
-  content:""; position:absolute; left:-0.75px; top:22%; width:1.5px; height:56%; pointer-events:none;
+  content:""; position:absolute; inset-inline-start:-0.75px; top:22%; width:1.5px; height:56%; pointer-events:none;
   background:linear-gradient(to bottom,transparent,rgba(235,248,255,.11) 22%,rgba(235,248,255,.11) 78%,transparent);
   box-shadow:1px 0 0 rgba(0,18,52,.045);
 }
@@ -8368,6 +8665,19 @@ class NimbusWeatherCard extends HTMLElement {
 }
 .fh  { font-size:14px; font-weight:600; margin-top:4px; color:white }
 .fl  { font-size:12px; font-weight:400; opacity:.5; margin-top:2px }
+.fp  {
+  display:flex; align-items:center; justify-content:center; gap:2px;
+  min-height:var(--nimbus-forecast-precip-icon); margin-top:auto; padding-top:3px;
+  color:rgba(174,220,255,.78); font-size:var(--nimbus-text-forecast-precip);
+  font-weight:650; line-height:1; font-variant-numeric:tabular-nums;
+  text-shadow:0 1px 2px rgba(0,20,55,.30);
+}
+.fp[aria-hidden="true"] { visibility:hidden }
+.fp-icon,.fp-icon > svg {
+  display:block; width:var(--nimbus-forecast-precip-icon);
+  height:var(--nimbus-forecast-precip-icon); flex:0 0 var(--nimbus-forecast-precip-icon);
+}
+.fp-icon { opacity:.88; filter:drop-shadow(0 1px 1px rgba(0,22,58,.24)); }
 .sf  { background:rgba(5,24,58,0.105); backdrop-filter:blur(16px) saturate(155%) brightness(0.97); -webkit-backdrop-filter:blur(16px) saturate(155%) brightness(0.97); border-radius:16px; border:1px solid rgba(255,255,255,0.12); box-shadow:0 1px 5px rgba(0,0,0,0.075), inset 0 1px 0 rgba(255,255,255,0.04); margin:0 auto; width:calc(100% - 0px) }
 .card.is-night .det {
   background:
@@ -8456,10 +8766,11 @@ class NimbusWeatherCard extends HTMLElement {
 .fi + .fi::before { background:linear-gradient(to bottom,transparent,rgba(235,248,255,.10) 24%,rgba(235,248,255,.10) 76%,transparent); }
 .sr  { display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:1px solid rgba(255,255,255,0.1) }
 .sr:last-child { border-bottom:none }
-.sr ha-icon { --mdc-icon-size:20px; opacity:.9; color:white; flex-shrink:0 }
+.sr :is(ha-icon,ha-state-icon) { --mdc-icon-size:20px; width:20px; height:20px; opacity:.9; color:white; flex-shrink:0 }
 .sn  { flex:1; font-size:13px; opacity:.8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
 .sv  { font-size:15px; font-weight:600; color:white }
-.su  { font-size:11px; opacity:.65; margin-left:2px }
+.sr-reading { display:inline-flex; align-items:baseline; gap:2px; min-width:0; direction:ltr; unicode-bidi:isolate; }
+.su  { font-size:11px; opacity:.65; }
 
 /* Typography values are applied after the visual HUD refinements above so
    the Standard preset remains identical to the established v2.5 appearance. */
@@ -8495,15 +8806,99 @@ class NimbusWeatherCard extends HTMLElement {
 .sv { font-size:var(--nimbus-text-sensor-value); }
 .su { font-size:var(--nimbus-text-sensor-unit); }
 
+/* Forecast/Sensors carousel: both pages participate in one intrinsic grid cell. This
+   keeps the outer card steady without a JS height/ResizeObserver feedback loop. */
+/* Clipped decoration must not become a scroll destination when focus moves
+   between the footer and a translated page/modal. */
+.card { overflow:clip; }
+.fc-modal { visibility:hidden; transition:transform .38s cubic-bezier(.25,.46,.45,.94),visibility 0s .38s; }
+.fc-modal.open { visibility:visible; transition-delay:0s; }
+.carousel-hero,.carousel-lower { display:contents; }
+:host([data-panel-fill-active]) .carousel-hero {
+  display:flow-root; flex:0 0 auto; min-width:0;
+}
+:host([data-panel-fill-active]) .carousel-lower {
+  display:flex; flex:0 0 auto; flex-direction:column; min-width:0; margin-block-start:auto;
+}
+.carousel-viewport { display:grid; grid-template-columns:minmax(0,1fr); min-width:0; overflow:hidden; padding-top:22px; margin-top:-22px; }
+.carousel-page { grid-area:1 / 1; min-width:0; visibility:hidden; pointer-events:none; transition:transform .38s cubic-bezier(.22,.68,.25,1),visibility 0s .38s; }
+.carousel-page-forecast { transform:translateX(0); }
+.carousel-page-sensors { display:flex; transform:translateX(calc(100% + 16px)); }
+.carousel-viewport[data-page="0"] .carousel-page-forecast,
+.carousel-viewport[data-page="1"] .carousel-page-sensors { visibility:visible; pointer-events:auto; transition-delay:0s; }
+.carousel-viewport[data-page="1"] .carousel-page-forecast { transform:translateX(calc(-100% - 16px)); }
+.carousel-viewport[data-page="1"] .carousel-page-sensors { transform:translateX(0); }
+:host([dir="rtl"]) .carousel-page-sensors { transform:translateX(calc(-100% - 16px)); }
+:host([dir="rtl"]) .carousel-viewport[data-page="1"] .carousel-page-forecast { transform:translateX(calc(100% + 16px)); }
+:host([dir="rtl"]) .carousel-viewport[data-page="1"] .carousel-page-sensors { transform:translateX(0); }
+.carousel-single .carousel-page-sensors { display:none; }
+.carousel-instant .carousel-page,.carousel-no-motion .carousel-page { transition:none; }
+#carousel-details,#carousel-legacy-sensors,#carousel-sensors { touch-action:pan-y; }
+#carousel-forecast .fc { touch-action:pan-y; }
+#carousel-sensors { display:flex; width:100%; min-width:0; }
+.carousel-footer { display:flex; align-items:center; justify-content:space-between; min-height:36px; gap:12px; margin-top:8px; }
+.carousel-footer[hidden],.carousel-footer button[hidden] { display:none !important; }
+.carousel-footer :is(.carousel-toggle,.fc-expand-btn),
+.card.is-night .carousel-footer :is(.carousel-toggle,.fc-expand-btn) {
+  appearance:none; -webkit-appearance:none; display:flex; align-items:center; justify-content:center;
+  min-height:36px; border:1px solid var(--forecast-hud-edge); border-radius:999px;
+  background:color-mix(in srgb,var(--forecast-hud-bg),rgba(255,255,255,.035));
+  backdrop-filter:blur(var(--forecast-hud-blur)) saturate(var(--forecast-hud-saturation)) brightness(1.005);
+  -webkit-backdrop-filter:blur(var(--forecast-hud-blur)) saturate(var(--forecast-hud-saturation)) brightness(1.005);
+  box-shadow:0 2px 6px var(--forecast-hud-shadow),inset 0 1px 0 color-mix(in srgb,var(--forecast-hud-edge),white 16%);
+  color:rgba(248,251,255,.76); cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:transparent;
+  transition:color .18s ease,border-color .18s ease,background .18s ease,transform .18s ease,box-shadow .18s ease;
+}
+.carousel-footer :is(.carousel-toggle,.fc-expand-btn):hover,
+.card.is-night .carousel-footer :is(.carousel-toggle,.fc-expand-btn):hover {
+  background:color-mix(in srgb,var(--forecast-hud-bg),rgba(255,255,255,.07));
+  border-color:color-mix(in srgb,var(--forecast-hud-edge),white 20%);
+  box-shadow:0 2px 7px var(--forecast-hud-shadow),inset 0 1px 0 color-mix(in srgb,var(--forecast-hud-edge),white 24%);
+  color:rgba(255,255,255,.76); transform:none;
+}
+.carousel-footer :is(.carousel-toggle,.fc-expand-btn):active { transform:scale(.98); }
+.carousel-footer :is(.carousel-toggle,.fc-expand-btn):focus-visible { outline:2px solid rgba(150,215,255,.72); outline-offset:2px; }
+.carousel-footer .fc-expand-btn { margin-block:0; margin-inline:auto 0; padding:7px 12px; }
+.carousel-toggle { gap:16px; width:80px; padding:9px 15px; }
+.carousel-dot { width:9px; height:9px; flex:none; border:1.3px solid rgba(240,250,255,.8); border-radius:50%; box-sizing:border-box; }
+.carousel-toggle[data-page="0"] .carousel-dot:first-child,
+.carousel-toggle[data-page="1"] .carousel-dot:last-child { background:rgba(247,252,255,.98); border-color:transparent; box-shadow:0 1px 5px rgba(0,25,65,.2); }
+.supplement-hud { display:flex; flex-direction:column; box-sizing:border-box; width:100%; min-width:0; padding:12px 14px 14px; }
+.supplement-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:var(--nimbus-text-clock); min-height:22px; margin-bottom:13px; color:rgba(248,252,255,.96); text-shadow:var(--hud-local-text-shadow); }
+#supplement-clock { flex:none; font-size:var(--nimbus-text-clock-time); font-weight:600; font-variant-numeric:tabular-nums; direction:ltr; unicode-bidi:isolate; }
+.supplement-window { position:relative; display:flex; flex:1; min-width:0; min-height:124px; overflow:hidden; touch-action:pan-y; cursor:grab; user-select:none; -webkit-user-select:none; }
+.supplement-window:active { cursor:grabbing; }
+.supplement-window:focus-visible { outline:2px solid rgba(200,235,255,.85); outline-offset:-3px; border-radius:8px; }
+.supplement-track { display:flex; width:100%; min-width:0; transform:translateX(0); }
+.supplement-track.is-sliding { transition:transform .4s cubic-bezier(.22,.68,.25,1); }
+.supplement-cell { box-sizing:border-box; flex:0 0 calc(100% / 3); display:flex; flex-direction:column; justify-content:center; align-items:center; min-width:0; gap:12px; padding:5px 8px; text-align:center; position:relative; }
+.supplement-cell + .supplement-cell::before { content:""; position:absolute; top:8%; bottom:8%; inset-inline-start:0; width:1px; background:linear-gradient(transparent,rgba(235,248,255,.22),transparent); }
+.supplement-name { font-size:var(--nimbus-text-sensor-name); line-height:1.25; height:2.5em; flex-shrink:0; display:flex; align-items:center; justify-content:center; overflow-wrap:anywhere; overflow:hidden; }
+.supplement-cell ha-state-icon { --mdc-icon-size:28px; width:28px; height:28px; color:rgba(245,252,255,.96); filter:drop-shadow(-1px 1.4px 1px rgba(0,22,55,.3)); }
+.supplement-reading { height:1.5em; flex-shrink:0; display:flex; align-items:baseline; justify-content:center; gap:3px; max-width:100%; overflow:hidden; direction:ltr; unicode-bidi:isolate; }
+.supplement-value { font-size:var(--nimbus-text-sensor-value); font-weight:600; font-variant-numeric:tabular-nums; }
+.supplement-unit { font-size:var(--nimbus-text-sensor-unit); opacity:.8; }
+.supplement-empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:8px; text-align:center; font-size:12px; line-height:1.4; opacity:.8; }
+.supplement-empty[hidden] { display:none; }
+@media (prefers-reduced-motion:reduce) { .carousel-page { transition:none; } }
+@media (pointer:coarse) { .carousel-toggle,.carousel-footer .fc-expand-btn { min-height:44px; } }
+@container (max-width:400px) {
+  .supplement-window { min-height:100px; }
+  .supplement-cell { gap:5px; padding:3px 6px; }
+  .supplement-name { font-size:12px; min-height:2.5em; }
+  .supplement-heading { margin-bottom:8px; }
+}
+
+
 @container (max-width:400px) {
   /* Grid mode places the columns itself, so it opts out of the flex gap and
      goes back to per-item padding with the divider on the column boundary. */
   .det-row-main { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); column-gap:0; row-gap:3px; }
   .di { min-width:0; padding:1px 9px; }
-  .di:nth-child(odd) { padding-left:0; }
-  .di:nth-child(even) { padding-right:0; }
+  .di:nth-child(odd) { padding-inline-start:0; }
+  .di:nth-child(even) { padding-inline-end:0; }
   .di:nth-child(odd)::before { display:none; }
-  .di:nth-child(even)::before { display:block; opacity:.72; left:0; }
+  .di:nth-child(even)::before { display:block; opacity:.72; inset-inline-start:0; }
   .fi { flex:0 0 20%; min-width:0; }
 }
 @container (max-width:320px) {
@@ -8579,10 +8974,10 @@ class NimbusWeatherCard extends HTMLElement {
     <div id="lightning-flash"></div>
     <!-- v2: forecast modal — built once in _buildShell, survives re-renders -->
     <div class="fc-modal-backdrop" id="fc-backdrop" aria-hidden="true"></div>
-    <div class="fc-modal" id="fc-modal" role="dialog" aria-modal="true" aria-hidden="true" tabindex="-1">
+    <div class="fc-modal" id="fc-modal" role="dialog" aria-modal="true" aria-hidden="true" tabindex="-1" inert>
       <div class="fc-modal-handle"></div>
       <div class="fc-modal-header" style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px 8px;">
-        <div class="fc-modal-title" style="padding:0;">7-Day Forecast</div>
+        <div class="fc-modal-title" dir="auto" style="padding:0;">7-Day Forecast</div>
         <button type="button" class="fc-modal-close" aria-label="Close forecast" style="cursor:pointer;font-size:18px;color:rgba(255,255,255,0.35);line-height:1;padding:4px 6px;border-radius:8px;background:rgba(255,255,255,0.06);border:0;">✕</button>
       </div>
       <div id="fc-modal-rows"></div>
@@ -8882,6 +9277,24 @@ class NimbusWeatherCard extends HTMLElement {
     );
   }
 
+  _forecastTemperatureUnit(sourceCtx = this._activeSourceContext()) {
+    return (
+      this._temperatureUnitForEntity(sourceCtx?.weatherEntity) ||
+      this._observedTemperatureSource(sourceCtx)?.unit ||
+      this._normalizeTemperatureUnit(this._config?.temperature_unit) ||
+      'C'
+    );
+  }
+
+  _withForecastTemperatureUnit(items = [], unit = null) {
+    const normalized = this._normalizeTemperatureUnit(unit) || 'C';
+    return items.map((item) =>
+      this._normalizeTemperatureUnit(item?._temperatureUnit)
+        ? item
+        : { ...item, _temperatureUnit: normalized },
+    );
+  }
+
   _observedTemperatureSource(sourceCtx) {
     const localEntityId = sourceCtx?.enabled
       ? this._localSourceField(sourceCtx.activeSource, 'local_temperature')
@@ -9113,6 +9526,19 @@ class NimbusWeatherCard extends HTMLElement {
     return v === null ? '--' : Math.round(v);
   }
 
+  _forecastPrecipitationProbability(item) {
+    const value = item?._isSunEvent
+      ? item._slotPrecipitationProbability
+      : item?.precipitation_probability;
+    if (typeof value !== 'number' && typeof value !== 'string') return null;
+    const normalized = typeof value === 'string' ? value.trim().replace(',', '.') : value;
+    if (!normalized && normalized !== 0) return null;
+    const probability = Number(normalized);
+    if (!Number.isFinite(probability)) return null;
+    if (probability < 0 || probability > 100) return null;
+    return Math.round(probability);
+  }
+
   _day(
     str,
     forecastType = this._config?.forecast_type || 'daily',
@@ -9324,6 +9750,10 @@ class NimbusWeatherCard extends HTMLElement {
   }
 
   _renderEntityError(entityId) {
+    this._clearSupplementTimer();
+    this._supplementGesture = null;
+    this._supplementWindow = null;
+    this._supplementCandidates = [];
     this._deactivateLunarSurface(null);
     this._lunarScene = null;
     const bgEl = this.shadowRoot?.getElementById('bg');
@@ -9377,6 +9807,12 @@ class NimbusWeatherCard extends HTMLElement {
 
   _renderContent() {
     if (!this._hass || !this._config) return;
+    const focusedSourceTab = this.shadowRoot?.activeElement?.closest?.(
+      '.source-tab[data-source-id]',
+    );
+    if (focusedSourceTab?.dataset?.sourceId) {
+      this._pendingSourceTabFocusId = focusedSourceTab.dataset.sourceId;
+    }
     const sourceCtx = this._activeSourceContext();
     const sourceMode = sourceCtx.enabled;
     const activeSource = sourceCtx.activeSource;
@@ -9544,11 +9980,7 @@ class NimbusWeatherCard extends HTMLElement {
     let items = this._currentOrUpcomingHourlyItems(forecast, mainType, sourceCtx).slice(0, maxItems);
     const dayContext = this._activeDayContext(new Date(), sourceCtx);
     const observedSource = this._observedTemperatureSource(sourceCtx);
-    const forecastUnit =
-      this._temperatureUnitForEntity(sourceCtx.weatherEntity) ||
-      observedSource?.unit ||
-      this._normalizeTemperatureUnit(this._config.temperature_unit) ||
-      'C';
+    const forecastUnit = this._forecastTemperatureUnit(sourceCtx);
     const observedRange = this._observedTodayRange(
       observedSource,
       forecastUnit,
@@ -9650,13 +10082,9 @@ class NimbusWeatherCard extends HTMLElement {
         maxItems,
         moonPhase,
         moonFraction,
+        forecastUnit,
       };
-      ct.innerHTML = [
-        this._renderHero(view),
-        this._renderDetails(view),
-        this._renderForecastStrip(view),
-        this._renderLocalSensors(view),
-      ].join('\n');
+      this._updateCarouselContent(ct, view);
     }
     this._attachSourceTabHandlers();
     // removed start log
@@ -9749,19 +10177,6 @@ class NimbusWeatherCard extends HTMLElement {
         }
       }, 100);
     }
-    // Re-attach expand button handler (ct innerHTML rebuilt each render)
-    setTimeout(() => {
-      const btn = this.shadowRoot?.getElementById('fc-expand-btn');
-      const backdrop = this.shadowRoot?.getElementById('fc-backdrop');
-      const modal = this.shadowRoot?.getElementById('fc-modal');
-      if (btn && backdrop && modal && !btn._nimbusHandled) {
-        btn._nimbusHandled = true;
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          this._openForecastModal(btn);
-        });
-      }
-    }, 50);
     this._initDetSplash(cond);
     this._markDetailLineStarts();
     this._tickClock();
@@ -9772,7 +10187,7 @@ class NimbusWeatherCard extends HTMLElement {
     } else {
       this._destroyUfo();
     }
-    // #ct changed its natural height; defer measurement until the browser has
+    // A content slot may have changed height; defer measurement until the browser has
     // committed wrapping, forecast columns and the source-tab footprint.
     this._schedulePanelFillSync();
   }
@@ -9809,18 +10224,18 @@ class NimbusWeatherCard extends HTMLElement {
         : '';
     return `
         <div class="hd">
-          <div class="loc">${this._escapeHtml(name)}</div>
+          <div class="loc bidi-auto" dir="auto">${this._escapeHtml(name)}</div>
         </div>
-        <div class="tmp">${temperature}°</div>
-        <div class="hl">${range}</div>
-        <div class="cn2">${this._condLabel(cond)}</div>`;
+        <div class="tmp"><bdi class="bidi-ltr" dir="ltr">${temperature}°</bdi></div>
+        <div class="hl"><bdi class="bidi-ltr" dir="ltr">${range}</bdi></div>
+        <div class="cn2"><bdi class="bidi-auto" dir="auto">${this._condLabel(cond)}</bdi></div>`;
   }
 
   _renderDetails(view) {
     const { displayOptions, clock } = view;
     if (!displayOptions.show_details && !displayOptions.show_clock) return '';
     const clockHtml = clock
-      ? `<div class="det-clock${displayOptions.show_details ? '' : ' det-clock-only'}" id="det-clock"><span class="det-clock-date">${clock.date}</span><span class="det-clock-time">${clock.time}</span></div>`
+      ? `<div class="det-clock${displayOptions.show_details ? '' : ' det-clock-only'}" id="det-clock"><span class="det-clock-date bidi-auto" dir="auto">${this._escapeHtml(clock.date)}</span><span class="det-clock-time" dir="ltr">${this._escapeHtml(clock.time)}</span></div>`
       : '';
     return `
         <div class="det-wrap">
@@ -9884,7 +10299,7 @@ class NimbusWeatherCard extends HTMLElement {
       };
     })();
 
-    const cell = (icon, text) => `<div class="di"><div class="dic">${icon}</div>${text}</div>`;
+    const cell = (icon, text) => `<div class="di"><div class="dic">${icon}</div><span class="bidi-ltr" dir="ltr">${text}</span></div>`;
     const humidity = localVal('local_humidity', attrs.humidity);
     const windStr = this._detailWindValue(view);
     const precip = localVal('local_precipitation', null);
@@ -9936,10 +10351,14 @@ class NimbusWeatherCard extends HTMLElement {
       })
       .map((f) => ({ ...f, _exactTime: f.datetime, datetime: snapToSlot(f.datetime) }))
       .filter((f) => f.datetime);
-    // Carry temperature from replaced slot into sun event
+    // Carry forecast values from the replaced slot into the sun event.
     sunEvts.forEach((s) => {
       const slot = items.find((f) => f.datetime === s.datetime);
-      if (slot) s._slotTemp = slot.temperature;
+      if (slot) {
+        s._slotTemp = slot.temperature;
+        s._slotPrecipitationProbability = slot.precipitation_probability;
+        s._temperatureUnit = slot._temperatureUnit;
+      }
     });
     const merged = items.filter((f) => !sunEvts.find((s) => s.datetime === f.datetime));
     return [...merged, ...sunEvts]
@@ -9950,9 +10369,20 @@ class NimbusWeatherCard extends HTMLElement {
       .slice(0, maxItems);
   }
 
-  _renderForecastTile(f, { mainType, displayOptions, moonPhase, moonFraction, sourceCtx }) {
+  _renderForecastPrecipitation(item, showRow) {
+    if (!showRow) return '';
+    const probability = this._forecastPrecipitationProbability(item);
+    if (probability === null) return '<div class="fp" aria-hidden="true"></div>';
+    return `<div class="fp bidi-ltr" dir="ltr" role="img" aria-label="Precipitation probability ${probability}%"><span class="fp-icon" aria-hidden="true">${MDI.humidity}</span><span class="fp-value" aria-hidden="true">${probability}%</span></div>`;
+  }
+
+  _renderForecastTile(
+    f,
+    { mainType, displayOptions, moonPhase, moonFraction, sourceCtx, showPrecipitationRow = false },
+  ) {
     const day = this._day(f.datetime, mainType, displayOptions.use_24h, sourceCtx);
     const forecastMoon = this._moonSnapshot(f.datetime, moonPhase, moonFraction);
+    const precipitation = this._renderForecastPrecipitation(f, showPrecipitationRow);
     if (f._isSunEvent) {
       const sunTime = this._formatEventTime(
         f._exactTime || f.datetime,
@@ -9961,52 +10391,74 @@ class NimbusWeatherCard extends HTMLElement {
       );
       return `
             <div class="fi fi-sun" data-suntime="${sunTime}" aria-label="${f.condition === 'sunrise' ? 'Sunrise' : 'Sunset'} ${sunTime}" tabindex="0">
-              <div class="fd">${day}</div>
+              <div class="fd bidi-auto" dir="auto">${day}</div>
               <div class="fic">${this.getCachedIcon(f.condition, false, forecastMoon.phase, forecastMoon.fraction)}</div>
-              <div class="fh">${f._slotTemp != null ? this._t(f._slotTemp, f._temperatureUnit) + '°' : ''}</div>
+              <div class="fh bidi-ltr" dir="ltr">${f._slotTemp != null ? this._t(f._slotTemp, f._temperatureUnit) + '°' : ''}</div>
+              ${precipitation}
             </div>`;
     }
     const icon = this._forecastIconArgs(f, mainType);
     return `
             <div class="fi">
-              <div class="fd">${day}</div>
+              <div class="fd bidi-auto" dir="auto">${day}</div>
               <div class="fic">${this.getCachedIcon(icon.condition, icon.isNight, forecastMoon.phase, forecastMoon.fraction)}</div>
-              <div class="fh">${this._tempNumber(f.temperature) !== null ? `${this._t(f.temperature, f._temperatureUnit)}°` : ''}</div>
-              ${this._tempNumber(f.templow) !== null ? `<div class="fl">${this._t(f.templow, f._temperatureUnit)}°</div>` : ''}
+              <div class="fh bidi-ltr" dir="ltr">${this._tempNumber(f.temperature) !== null ? `${this._t(f.temperature, f._temperatureUnit)}°` : ''}</div>
+              ${this._tempNumber(f.templow) !== null ? `<div class="fl bidi-ltr" dir="ltr">${this._t(f.templow, f._temperatureUnit)}°</div>` : ''}
+              ${precipitation}
             </div>`;
   }
 
   _renderForecastStrip(view) {
-    const { displayOptions, items, modalForecastType } = view;
+    const { displayOptions } = view;
+    const items = this._withForecastTemperatureUnit(
+      view.items,
+      view.forecastUnit || this._forecastTemperatureUnit(view.sourceCtx),
+    );
     if (!displayOptions.show_forecast || !items.length) return '';
-    const tiles = this._forecastStripItems(view)
-      .map((f) => this._renderForecastTile(f, view))
+    const forecastItems = this._forecastStripItems({ ...view, items });
+    const showPrecipitationRow =
+      displayOptions.show_precipitation_probability &&
+      forecastItems.some((item) => this._forecastPrecipitationProbability(item) !== null);
+    const tileView = { ...view, showPrecipitationRow };
+    const tiles = forecastItems
+      .map((f) => this._renderForecastTile(f, tileView))
       .join('');
     return `
         <div class="fc" id="fc-strip">
           ${tiles}
-        </div>
-        <button type="button" class="fc-expand-btn" id="fc-expand-btn" aria-haspopup="dialog" aria-controls="fc-modal" aria-expanded="false">
-          <span>${this._forecastButtonLabel(modalForecastType)}</span>
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 9L7 5L11 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>`;
+        </div>`;
   }
 
-  // Extra sensor rows take the place of the forecast strip when it is hidden.
-  _renderLocalSensors({ displayOptions }) {
-    const sensors = this._config.local_sensors;
-    if (displayOptions.show_forecast || !sensors?.length) return '';
+  _configuredSupplementalSensors(sourceCtx = this._activeSourceContext()) {
+    // An explicit empty source list opts out of legacy global supplements.
+    const configured = sourceCtx.activeSource?.local_sensors;
+    const sensors = Array.isArray(configured) ? configured : this._config.local_sensors;
+    return (Array.isArray(sensors) ? sensors : [])
+      .filter((sensor) => sensor && typeof sensor.entity === 'string' && sensor.entity);
+  }
+
+  _supplementalSensors(sourceCtx = this._activeSourceContext()) {
+    return this._configuredSupplementalSensors(sourceCtx).slice(
+      0,
+      NIMBUS_MAX_SUPPLEMENTAL_SENSORS,
+    );
+  }
+
+  // Preserve the pre-carousel rows for a sensors-only card.
+  _renderLocalSensors({ displayOptions, sourceCtx }) {
+    const sensors = this._configuredSupplementalSensors(sourceCtx);
+    if (displayOptions.show_forecast || !sensors.length) return '';
     const rows = sensors
       .map((s) => {
         const ent = this._hass?.states[s.entity];
-        const val = ent ? ent.state : '--';
-        const unit = ent ? ent.attributes.unit_of_measurement || '' : '';
+        const available = this._isUsableValue(ent?.state);
+        const val = available ? ent.state : '—';
+        const unit = available ? ent.attributes.unit_of_measurement || '' : '';
         const name = s.name || (ent ? ent.attributes.friendly_name : s.entity);
-        const icon = s.icon || 'mdi:gauge';
         return `<div class="sr">
-              <ha-icon icon="${this._escapeHtml(icon)}"></ha-icon>
-              <span class="sn">${this._escapeHtml(name)}</span>
-              <span class="sv">${this._escapeHtml(val)}</span><span class="su">${this._escapeHtml(unit)}</span>
+              <ha-state-icon></ha-state-icon>
+              <span class="sn"><bdi dir="auto">${this._escapeHtml(name)}</bdi></span>
+              <span class="sr-reading" dir="ltr"><span class="sv">${this._escapeHtml(val)}</span><span class="su">${this._escapeHtml(unit)}</span></span>
             </div>`;
       })
       .join('');
@@ -10014,6 +10466,533 @@ class NimbusWeatherCard extends HTMLElement {
         <div class="sf">
           ${rows}
         </div>`;
+  }
+
+  _supplementMetricMarkup() {
+    return `<span class="supplement-name bidi-auto" dir="auto"></span><ha-state-icon></ha-state-icon>
+      <div class="supplement-reading" dir="ltr"><span class="supplement-value"></span><span class="supplement-unit"></span></div>`;
+  }
+
+  _updateSensorStateIcon(icon, sensor, entity) {
+    if (!icon) return;
+    const iconOverride = sensor?.icon?.trim() || undefined;
+    if (icon.hass !== this._hass) icon.hass = this._hass;
+    if (icon.stateObj !== entity) icon.stateObj = entity;
+    if (icon.icon !== iconOverride) icon.icon = iconOverride;
+  }
+
+  _updateLegacySensorIcons(sensors) {
+    const icons = this.shadowRoot
+      .getElementById('carousel-legacy-sensors')
+      ?.querySelectorAll('.sr ha-state-icon');
+    icons?.forEach((icon, index) => {
+      const sensor = sensors[index];
+      this._updateSensorStateIcon(icon, sensor, this._hass?.states?.[sensor?.entity]);
+    });
+  }
+
+  _renderSupplementalHud() {
+    // One keyed row, viewed three cells at a time. The shared cell is never
+    // cloned: it travels from the right edge to the left edge of the window.
+    return `<section class="sf supplement-hud">
+      <div class="supplement-heading"><span class="supplement-label bidi-auto" dir="auto"></span><span id="supplement-clock" dir="ltr"></span></div>
+      <div id="supplement-window" class="supplement-window" data-start="0" tabindex="0" role="group" aria-roledescription="carousel" aria-live="off">
+        <div id="supplement-track" class="supplement-track"></div>
+        <div class="supplement-empty" hidden></div>
+      </div>
+    </section>`;
+  }
+
+  _updateSupplementCell(cell, sensor, fallbackName = '') {
+    const entity = this._hass?.states?.[sensor?.entity];
+    const available = this._isUsableValue(entity?.state);
+    const name = sensor?.name || entity?.attributes?.friendly_name || sensor?.entity || fallbackName;
+    const fields = {
+      '.supplement-name': name,
+      '.supplement-value': available ? String(entity.state) : '—',
+      '.supplement-unit': available ? entity.attributes?.unit_of_measurement || '' : '',
+    };
+    cell.dataset.entity = sensor?.entity || '';
+    Object.entries(fields).forEach(([selector, value]) => {
+      const node = cell.querySelector(selector);
+      if (node.textContent !== value) node.textContent = value;
+    });
+    this._updateSensorStateIcon(cell.querySelector('ha-state-icon'), sensor, entity);
+  }
+
+  _updateSupplementalHud(view, sensors, enabled) {
+    const container = this.shadowRoot.getElementById('carousel-sensors');
+    if (!enabled) {
+      this._clearSupplementTimer();
+      this._supplementGesture = null;
+      this._supplementWindow = null;
+      this._supplementCandidates = [];
+      if (container.firstChild) container.replaceChildren();
+      return;
+    }
+    let hud = container.querySelector('.supplement-hud');
+    const isNew = !hud;
+    const source = this._carouselSourceKey(view.sourceCtx);
+    const sourceChanged = source !== this._supplementSource;
+    const candidates = sensors.filter((sensor, index, configured) =>
+      configured.findIndex((item) => item.entity === sensor.entity) === index
+      && this._isUsableValue(this._hass?.states?.[sensor.entity]?.state));
+    const candidatesChanged = candidates.map((sensor) => sensor.entity).join('|') !== this._supplementCandidates.map((sensor) => sensor.entity).join('|');
+    const preserveDiscoveryDeadline = !isNew && !sourceChanged && candidatesChanged
+      && this._supplementTimerPhase === 'discovery' && this._supplementTimer !== null
+      && this._supplementCandidates.length > 3 && candidates.length > 3;
+    if ((isNew || sourceChanged || candidatesChanged) && !preserveDiscoveryDeadline) {
+      this._clearSupplementTimer();
+      this._settleSupplementPage();
+      this._supplementGesture = null;
+    }
+    if (isNew) {
+      container.innerHTML = this._renderSupplementalHud();
+      hud = container.querySelector('.supplement-hud');
+      this._attachSupplementHandlers(hud);
+    }
+    const label = 'Supplemental Sensors';
+    hud.setAttribute('aria-label', label);
+    hud.querySelector('.supplement-label').textContent = label;
+    const clock = hud.querySelector('#supplement-clock');
+    clock.hidden = !view.clock;
+    if (view.clock) clock.textContent = view.clock.time;
+    const windowNode = hud.querySelector('#supplement-window');
+    const track = hud.querySelector('#supplement-track');
+    this._supplementWindow = windowNode;
+    this._supplementSource = source;
+    this._supplementCandidates = candidates;
+    const starts = this._supplementPageStarts();
+    const remembered = this._supplementSelections.get(source) === 1 ? 1 : 0;
+    windowNode.dataset.start = String(starts[Math.min(remembered, starts.length - 1)]);
+    track.querySelectorAll('.supplement-cell').forEach((cell) => {
+      if (!candidates.some((sensor) => sensor.entity === cell.dataset.entity)) cell.remove();
+    });
+    candidates.forEach((sensor, index) => {
+      let cell = [...track.children].find((node) => node.dataset.entity === sensor.entity);
+      if (!cell) {
+        cell = document.createElement('div');
+        cell.className = 'supplement-cell';
+        cell.innerHTML = this._supplementMetricMarkup();
+      }
+      this._updateSupplementCell(cell, sensor);
+      // Reorder only when the configured/available list changes. Live readings
+      // preserve the exact cell and text nodes, including during a slide.
+      if (track.children[index] !== cell) track.insertBefore(cell, track.children[index] || null);
+    });
+    const empty = windowNode.querySelector('.supplement-empty');
+    empty.hidden = candidates.length > 0;
+    empty.textContent = 'No available data';
+    this._labelSupplementPage();
+    if (isNew || sourceChanged || candidatesChanged) this._settleSupplementPage();
+    this._syncSupplementDiscovery();
+  }
+
+  _supplementPageStarts() {
+    const lastStart = Math.max(0, this._supplementCandidates.length - 3);
+    return lastStart ? [0, lastStart] : [0];
+  }
+
+  _labelSupplementPage() {
+    const windowNode = this._supplementWindow;
+    if (!windowNode) return;
+    const start = Number(windowNode.dataset.start) || 0;
+    const cells = [...windowNode.querySelectorAll('.supplement-cell')];
+    cells.forEach((cell, index) => cell.setAttribute('aria-hidden', String(index < start || index >= start + 3)));
+    const names = cells.slice(start, start + 3).map((cell) => cell.querySelector('.supplement-name').textContent).join(', ');
+    const canChangePage = this._supplementPageStarts().length > 1;
+    const changeHint = 'Use left or right arrow keys to change sensors.';
+    windowNode.setAttribute('aria-label', names
+      ? `${names}${canChangePage ? `. ${changeHint}` : ''}`
+      : 'No available data');
+  }
+
+  _clearSupplementTimer() {
+    if (this._supplementTimer !== null) clearTimeout(this._supplementTimer);
+    this._supplementTimer = null;
+    this._supplementTimerPhase = null;
+  }
+
+  _settleSupplementPage() {
+    const windowNode = this._supplementWindow;
+    const track = windowNode?.querySelector('#supplement-track');
+    if (!track) return;
+    track.classList.remove('is-sliding');
+    track.style.transform = `translateX(${this._supplementTrackOffset(windowNode.dataset.start)}%)`;
+  }
+
+  _supplementMotionEnabled() {
+    return (this._config?.animation_speed ?? 1) !== 0 && !this._supplementMotionQuery?.matches;
+  }
+
+  _syncSupplementDiscovery() {
+    const visible = this.isConnected && this._supplementWindow?.isConnected
+      && this.shadowRoot.getElementById('carousel-viewport')?.dataset.page === '1'
+      && !document.hidden && !this._isForecastModalOpen();
+    if (!this._supplementMotionEnabled()) {
+      this._supplementDiscoveryDone = true;
+      this._clearSupplementTimer();
+      this._settleSupplementPage();
+      return;
+    }
+    if (!visible || this._supplementGesture) {
+      this._clearSupplementTimer();
+      this._settleSupplementPage();
+      return;
+    }
+    // Ordinary value updates must not cut a user-triggered or discovery slide
+    // short. Structural source/availability changes clear it before this call.
+    if (this._supplementTimerPhase === 'slide' && this._supplementTimer !== null) return;
+    if (this._supplementDiscoveryDone || this._supplementPageStarts().length < 2
+      || Number(this._supplementWindow.dataset.start) !== 0) {
+      this._clearSupplementTimer();
+      this._settleSupplementPage();
+      return;
+    }
+    // This is a one-shot discoverability cue for the current dashboard load.
+    // Live updates and internal renders keep the original deadline intact.
+    if (this._supplementTimer !== null) return;
+    const discoverySource = this._supplementSource;
+    const discoveryWindow = this._supplementWindow;
+    this._supplementTimerPhase = 'discovery';
+    this._supplementTimer = setTimeout(() => {
+      this._supplementTimer = null;
+      this._supplementTimerPhase = null;
+      const sourceCtx = this._activeSourceContext();
+      const liveSource = this._carouselSourceKey(sourceCtx);
+      const liveSensors = this._supplementalSensors(sourceCtx);
+      const liveCandidates = liveSensors.filter((sensor, index, configured) =>
+        configured.findIndex((item) => item.entity === sensor.entity) === index
+        && this._isUsableValue(this._hass?.states?.[sensor.entity]?.state));
+      const stillEligible = !this._supplementDiscoveryDone
+        && discoveryWindow === this._supplementWindow
+        && discoveryWindow?.isConnected
+        && discoverySource === this._supplementSource && discoverySource === liveSource
+        && this._activeDisplayOptions(sourceCtx).show_forecast
+        && liveCandidates.length > 3 && this._supplementPageStarts().length > 1
+        && this.shadowRoot.getElementById('carousel-viewport')?.dataset.page === '1'
+        && !document.hidden && !this._isForecastModalOpen()
+        && !this._supplementGesture && this._supplementMotionEnabled()
+        && Number(discoveryWindow.dataset.start) === 0;
+      if (stillEligible) this._stepSupplementPage(1);
+      else this._syncSupplementDiscovery();
+    }, NIMBUS_SUPPLEMENT_DISCOVERY_DELAY_MS);
+  }
+
+  _stepSupplementPage(direction) {
+    const windowNode = this._supplementWindow;
+    const track = windowNode?.querySelector('#supplement-track');
+    const starts = this._supplementPageStarts();
+    this._clearSupplementTimer();
+    this._settleSupplementPage();
+    if (!windowNode?.isConnected || starts.length < 2) {
+      return;
+    }
+    // Automatic and eligible manual movement both consume the one discovery
+    // transition. A static <=3-metric source leaves it for a later source.
+    this._supplementDiscoveryDone = true;
+    const index = Math.max(0, starts.indexOf(Number(windowNode.dataset.start)));
+    const step = direction < 0 ? -1 : 1;
+    const nextPage = (index + step + starts.length) % starts.length;
+    windowNode.dataset.start = String(starts[nextPage]);
+    this._supplementSelections.set(this._supplementSource, nextPage);
+    this._labelSupplementPage();
+    if (!this._supplementMotionEnabled()) {
+      this._settleSupplementPage();
+      return;
+    }
+    // The single track moves by two cell widths for five metrics. At the last
+    // window it slides back along the same row, without clones or edge jumps.
+    void track.offsetWidth;
+    track.classList.add('is-sliding');
+    track.style.transform = `translateX(${this._supplementTrackOffset(starts[nextPage])}%)`;
+    this._supplementTimerPhase = 'slide';
+    this._supplementTimer = setTimeout(() => {
+      this._supplementTimer = null;
+      this._supplementTimerPhase = null;
+      this._settleSupplementPage();
+    }, 400);
+  }
+
+  _attachSupplementHandlers(hud) {
+    hud.addEventListener('click', (event) => {
+      // Exclude the complete glass frame (including heading/padding), while
+      // the hero and other card areas retain the existing configured action.
+      if (this.shadowRoot.getElementById('carousel-viewport')?.dataset.page === '1') event.stopPropagation();
+    });
+    const windowNode = hud.querySelector('#supplement-window');
+    windowNode.addEventListener('keydown', (event) => {
+      if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this._stepSupplementPage(this._horizontalKeyStep(event.key));
+    });
+    windowNode.addEventListener('pointerdown', (event) => {
+      if (!event.isPrimary || event.button !== 0) return;
+      event.stopPropagation();
+      if (this._supplementPageStarts().length > 1) this._supplementDiscoveryDone = true;
+      this._clearSupplementTimer();
+      this._settleSupplementPage();
+      this._supplementGesture = { id: event.pointerId, x: event.clientX, y: event.clientY, horizontal: false, vertical: false };
+      try { windowNode.setPointerCapture(event.pointerId); } catch (err) {}
+    });
+    windowNode.addEventListener('pointermove', (event) => {
+      const gesture = this._supplementGesture;
+      if (!gesture || gesture.id !== event.pointerId) return;
+      const dx = event.clientX - gesture.x;
+      const dy = event.clientY - gesture.y;
+      if (!gesture.horizontal && Math.abs(dy) > 12 && Math.abs(dy) >= Math.abs(dx)) gesture.vertical = true;
+      if (!gesture.vertical && Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.35) gesture.horizontal = true;
+      if (gesture.horizontal) event.preventDefault();
+      event.stopPropagation();
+    }, { passive: false });
+    const finish = (event, cancelled = false) => {
+      const gesture = this._supplementGesture;
+      if (!gesture || gesture.id !== event.pointerId) return;
+      this._supplementGesture = null;
+      event.stopPropagation();
+      try { windowNode.releasePointerCapture(event.pointerId); } catch (err) {}
+      const dx = event.clientX - gesture.x;
+      if (!cancelled && gesture.horizontal && Math.abs(dx) >= 36) {
+        this._stepSupplementPage(this._horizontalGestureStep(dx));
+      }
+    };
+    windowNode.addEventListener('pointerup', (event) => finish(event));
+    windowNode.addEventListener('pointercancel', (event) => finish(event, true));
+    windowNode.addEventListener('lostpointercapture', (event) => finish(event, true));
+  }
+
+  _carouselSourceKey(sourceCtx) {
+    return sourceCtx.activeSourceId || `legacy:${sourceCtx.weatherEntity}`;
+  }
+
+  _loadCarouselPages(sourceCtx) {
+    const sourceIds = sourceCtx.sources.length
+      ? sourceCtx.sources.map((source) => source.id)
+      : [this._carouselSourceKey(sourceCtx)];
+    const key = this._sourceSetStorageKey('carousel-pages', sourceIds);
+    if (key === this._carouselStorageKey) return;
+    this._carouselStorageKey = key;
+    this._carouselPages = new Map();
+    try {
+      const readStored = (candidate) => {
+        const raw = window.localStorage?.getItem(candidate);
+        if (raw == null) return null;
+        try {
+          const parsed = JSON.parse(raw);
+          return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? { parsed, raw }
+            : null;
+        } catch (err) {
+          return null;
+        }
+      };
+      let entry = readStored(key);
+      if (!entry) {
+        for (const candidate of this._legacySourceSetStorageKeys('carousel-pages', sourceIds)) {
+          entry = readStored(candidate);
+          if (!entry) continue;
+          window.localStorage?.setItem(key, entry.raw);
+          break;
+        }
+      }
+      const stored = entry?.parsed || null;
+      sourceIds.forEach((id) => {
+        if (stored?.[id] === 0 || stored?.[id] === 1) this._carouselPages.set(id, stored[id]);
+      });
+    } catch (err) {}
+  }
+
+  _updateCarouselSlot(id, html) {
+    const slot = this.shadowRoot.getElementById(id);
+    // Cache the source string rather than serialised DOM, which contains live
+    // clock text and browser-normalised markup. Unchanged sections keep nodes,
+    // focus, tooltip handlers and forecast scroll position.
+    if (slot && slot._nimbusHtml !== html) {
+      slot.innerHTML = html;
+      slot._nimbusHtml = html;
+    }
+  }
+
+  _updateCarouselContent(ct, view) {
+    const sensors = this._supplementalSensors(view.sourceCtx);
+    const legacySensors = this._configuredSupplementalSensors(view.sourceCtx);
+    const twoPages = view.displayOptions.show_forecast && sensors.length > 0;
+    let viewport = this.shadowRoot.getElementById('carousel-viewport');
+    const isNew = !viewport;
+    if (isNew) {
+      ct.innerHTML = `<div id="carousel-hero" class="carousel-hero"></div>
+        <div id="carousel-lower" class="carousel-lower">
+          <div id="carousel-viewport" class="carousel-viewport carousel-instant" data-page="0" role="region" aria-label="Weather details">
+            <div id="carousel-page-forecast" class="carousel-page carousel-page-forecast" role="group" aria-label="Forecast">
+              <div id="carousel-details"></div><div id="carousel-forecast"></div><div id="carousel-legacy-sensors"></div>
+            </div>
+            <div id="carousel-page-sensors" class="carousel-page carousel-page-sensors" role="group" aria-label="Supplemental sensors"><div id="carousel-sensors"></div></div>
+          </div>
+          <div id="carousel-footer" class="carousel-footer">
+            <button type="button" id="carousel-toggle" class="carousel-toggle" aria-controls="carousel-viewport" aria-label="Show supplemental sensors" aria-pressed="false"><span class="carousel-dot" aria-hidden="true"></span><span class="carousel-dot" aria-hidden="true"></span></button>
+            <button type="button" class="fc-expand-btn" id="fc-expand-btn" aria-haspopup="dialog" aria-controls="fc-modal" aria-expanded="false"><span dir="ltr"></span><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 9L7 5L11 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          </div>
+        </div>`;
+      viewport = this.shadowRoot.getElementById('carousel-viewport');
+      this._attachCarouselHandlers(viewport);
+      this._carouselResizeObserver?.disconnect();
+      if (typeof ResizeObserver !== 'undefined') {
+        // Observes width only to choose touch behaviour; never writes geometry.
+        this._carouselResizeObserver = new ResizeObserver(() => this._syncCarouselGestureSurface());
+        this._carouselResizeObserver.observe(viewport);
+      }
+    }
+    this._loadCarouselPages(view.sourceCtx);
+    this._carouselCurrentSource = this._carouselSourceKey(view.sourceCtx);
+    this._carouselHasTwoPages = twoPages;
+    viewport.classList.toggle('carousel-single', !twoPages);
+    viewport.classList.toggle('carousel-no-motion', (this._config.animation_speed ?? 1) === 0);
+    this._updateCarouselSlot('carousel-hero', this._renderHero(view));
+    this._updateCarouselSlot('carousel-details', this._renderDetails(view));
+    this._updateCarouselSlot('carousel-forecast', this._renderForecastStrip(view));
+    this._updateCarouselSlot('carousel-legacy-sensors', this._renderLocalSensors(view));
+    this._updateLegacySensorIcons(legacySensors);
+    this._updateSupplementalHud(view, sensors, twoPages);
+    const toggle = this.shadowRoot.getElementById('carousel-toggle');
+    const expand = this.shadowRoot.getElementById('fc-expand-btn');
+    toggle.hidden = !twoPages;
+    expand.hidden = !view.displayOptions.show_forecast || !view.items.length;
+    expand.querySelector('span').textContent = this._forecastButtonLabel(view.modalForecastType);
+    this.shadowRoot.getElementById('carousel-footer').hidden = toggle.hidden && expand.hidden;
+    this._applyCarouselPage(twoPages ? this._carouselPages.get(this._carouselCurrentSource) || 0 : 0);
+    this._syncCarouselGestureSurface();
+    if (isNew) requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (viewport.isConnected) viewport.classList.remove('carousel-instant');
+    }));
+  }
+
+  _applyCarouselPage(page) {
+    const viewport = this.shadowRoot.getElementById('carousel-viewport');
+    if (!viewport) return;
+    const next = this._carouselHasTwoPages && page === 1 ? 1 : 0;
+    const toggle = this.shadowRoot.getElementById('carousel-toggle');
+    viewport.dataset.page = String(next);
+    toggle.setAttribute('aria-pressed', String(next === 1));
+    toggle.setAttribute('aria-label', next ? 'Show forecast' : 'Show supplemental sensors');
+    toggle.dataset.page = String(next);
+    ['carousel-page-forecast', 'carousel-page-sensors'].forEach((id, index) => {
+      const section = this.shadowRoot.getElementById(id);
+      const inactive = index !== next;
+      if (inactive && section.contains(this.shadowRoot.activeElement)) toggle.focus({ preventScroll: true });
+      section.setAttribute('aria-hidden', String(inactive));
+      // Chromium 108 supports inert. Keep an explicit tabindex fallback for
+      // older embedded WebViews as well, without hiding a page during slide.
+      section.inert = inactive;
+      section.querySelectorAll('button,a,input,select,textarea,[tabindex]').forEach((node) => {
+        if (inactive) {
+          if (!node.hasAttribute('data-carousel-tabindex')) node.setAttribute('data-carousel-tabindex', node.getAttribute('tabindex') ?? '');
+          node.setAttribute('tabindex', '-1');
+        } else if (node.hasAttribute('data-carousel-tabindex')) {
+          const previous = node.getAttribute('data-carousel-tabindex');
+          if (previous === '') node.removeAttribute('tabindex');
+          else node.setAttribute('tabindex', previous);
+          node.removeAttribute('data-carousel-tabindex');
+        }
+      });
+    });
+    this._syncSupplementDiscovery();
+  }
+
+  _setCarouselPage(page) {
+    if (!this._carouselHasTwoPages) return;
+    const next = page === 1 ? 1 : 0;
+    this._carouselPages.set(this._carouselCurrentSource, next);
+    try {
+      window.localStorage?.setItem(this._carouselStorageKey, JSON.stringify(Object.fromEntries(this._carouselPages)));
+    } catch (err) {}
+    this._applyCarouselPage(next);
+  }
+
+  _syncCarouselGestureSurface() {
+    const strip = this.shadowRoot?.getElementById('fc-strip');
+    if (strip) strip.style.touchAction = strip.scrollWidth > strip.clientWidth + 1 ? 'pan-x pan-y' : 'pan-y';
+  }
+
+  _attachCarouselHandlers(viewport) {
+    const toggle = this.shadowRoot.getElementById('carousel-toggle');
+    const expand = this.shadowRoot.getElementById('fc-expand-btn');
+    toggle.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this._setCarouselPage(viewport.dataset.page === '0' ? 1 : 0);
+    });
+    expand.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this._openForecastModal(expand);
+    });
+    const onKey = (event) => {
+      if (!this._carouselHasTwoPages || !['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+      if (event.target.closest('#supplement-window')) return;
+      if (event.target.closest('input,select,textarea')) return;
+      const strip = event.target.closest('.fc');
+      if (strip && strip.scrollWidth > strip.clientWidth + 1) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this._setCarouselPage(this._horizontalKeyStep(event.key) > 0 ? 1 : 0);
+      toggle.focus({ preventScroll: true });
+    };
+    toggle.addEventListener('keydown', onKey);
+    viewport.addEventListener('keydown', onKey);
+    // Let a truly scrollable forecast strip keep its existing horizontal
+    // gesture. Other page surfaces use pan-y so vertical dashboard scroll wins.
+    let gesture = null;
+    viewport.addEventListener('pointerdown', (event) => {
+      if (!this._carouselHasTwoPages || !event.isPrimary || event.button !== 0) return;
+      if (event.target.closest('#supplement-window')) return;
+      const control = event.target.closest('button,a,input,select,textarea,[tabindex]');
+      // The card itself is focusable; only controls inside this gesture surface
+      // should opt out of swiping, not an ancestor outside it.
+      if (control && viewport.contains(control)) return;
+      const strip = event.target.closest('.fc');
+      if (strip && strip.scrollWidth > strip.clientWidth + 1) return;
+      gesture = { id: event.pointerId, x: event.clientX, y: event.clientY, horizontal: false };
+    });
+    viewport.addEventListener('pointermove', (event) => {
+      if (!gesture || gesture.id !== event.pointerId) return;
+      const dx = event.clientX - gesture.x;
+      const dy = event.clientY - gesture.y;
+      if (!gesture.horizontal && Math.abs(dy) > 12 && Math.abs(dy) >= Math.abs(dx)) {
+        gesture = null;
+        return;
+      }
+      if (!gesture.horizontal && Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.35) {
+        gesture.horizontal = true;
+        try { viewport.setPointerCapture(event.pointerId); } catch (err) {}
+      }
+      if (gesture.horizontal) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }, { passive: false });
+    const finish = (event, cancelled = false) => {
+      if (!gesture || gesture.id !== event.pointerId) return;
+      const current = gesture;
+      gesture = null;
+      try { viewport.releasePointerCapture(event.pointerId); } catch (err) {}
+      if (!current.horizontal) return;
+      this._carouselSuppressClickUntil = performance.now() + 450;
+      event.stopPropagation();
+      const dx = event.clientX - current.x;
+      if (!cancelled && Math.abs(dx) >= 48) {
+        this._setCarouselPage(this._horizontalGestureStep(dx) > 0 ? 1 : 0);
+      }
+    };
+    viewport.addEventListener('pointerup', (event) => finish(event));
+    viewport.addEventListener('pointercancel', (event) => finish(event, true));
+    viewport.addEventListener('lostpointercapture', () => { gesture = null; });
+    // Capture the browser's click generated after a swipe before it can reach
+    // forecast tooltips or the card's configured tap action.
+    viewport.addEventListener('click', (event) => {
+      if (performance.now() < this._carouselSuppressClickUntil) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    }, true);
   }
 
   // The separator is drawn by `.di + .di::before`, i.e. from DOM order, but
@@ -10107,7 +11086,10 @@ class NimbusWeatherCard extends HTMLElement {
       rows.innerHTML = `<div class="fc-modal-empty">No ${forecastType} forecast available</div>`;
       return;
     }
-    const allItems = forecast.slice(0, this._modalForecastLimit(forecastType));
+    const allItems = this._withForecastTemperatureUnit(
+      forecast.slice(0, this._modalForecastLimit(forecastType)),
+      this._forecastTemperatureUnit(sourceCtx),
+    );
     const toNumber = (v) => this._tempNumber(v);
     const tempValues = allItems.flatMap((f) => {
       const hi = toNumber(f.temperature);
@@ -10144,20 +11126,24 @@ class NimbusWeatherCard extends HTMLElement {
         const forecastMoon = this._moonSnapshot(f.datetime, moonPhase, moonFraction);
         if (forecastType === 'hourly') {
           return `<div class="fc-modal-row">
-          <div class="fc-modal-day">${this._day(f.datetime, forecastType, use24h, sourceCtx)}</div>
+          <div class="fc-modal-day"><bdi dir="auto">${this._day(f.datetime, forecastType, use24h, sourceCtx)}</bdi></div>
           <div class="fc-modal-icon">${this.getCachedIcon(icon.condition, icon.isNight, forecastMoon.phase, forecastMoon.fraction)}</div>
-          <div class="fc-modal-temp">${hi !== null ? `${this._t(hi, f._temperatureUnit)}°` : '--'}</div>
-          <div class="fc-modal-bar-bg"><div class="fc-modal-bar-fill" style="width:${barWidth.toFixed(1)}%;margin-left:${barLeft.toFixed(1)}%"></div></div>
-          <div class="fc-modal-precip">${f.precipitation_probability > 0 ? f.precipitation_probability + '%' : ''}</div>
+          <div class="fc-modal-range" dir="ltr">
+            <div class="fc-modal-temp" dir="ltr">${hi !== null ? `${this._t(hi, f._temperatureUnit)}°` : '--'}</div>
+            <div class="fc-modal-bar-bg"><div class="fc-modal-bar-fill" style="width:${barWidth.toFixed(1)}%;margin-left:${barLeft.toFixed(1)}%"></div></div>
+          </div>
+          <div class="fc-modal-precip" dir="ltr">${f.precipitation_probability > 0 ? f.precipitation_probability + '%' : ''}</div>
         </div>`;
         }
         return `<div class="fc-modal-row">
-        <div class="fc-modal-day">${this._day(f.datetime, forecastType, use24h, sourceCtx)}</div>
+        <div class="fc-modal-day"><bdi dir="auto">${this._day(f.datetime, forecastType, use24h, sourceCtx)}</bdi></div>
         <div class="fc-modal-icon">${this.getCachedIcon(icon.condition, icon.isNight, forecastMoon.phase, forecastMoon.fraction)}</div>
-        <div class="fc-modal-lo">${lo !== null ? `${this._t(lo, f._temperatureUnit)}°` : '--'}</div>
-        <div class="fc-modal-bar-bg"><div class="fc-modal-bar-fill" style="width:${barWidth.toFixed(1)}%;margin-left:${barLeft.toFixed(1)}%"></div></div>
-        <div class="fc-modal-hi">${hi !== null ? `${this._t(hi, f._temperatureUnit)}°` : '--'}</div>
-        <div class="fc-modal-precip">${f.precipitation_probability > 0 ? f.precipitation_probability + '%' : ''}</div>
+        <div class="fc-modal-range" dir="ltr">
+          <div class="fc-modal-lo" dir="ltr">${lo !== null ? `${this._t(lo, f._temperatureUnit)}°` : '--'}</div>
+          <div class="fc-modal-bar-bg"><div class="fc-modal-bar-fill" style="width:${barWidth.toFixed(1)}%;margin-left:${barLeft.toFixed(1)}%"></div></div>
+          <div class="fc-modal-hi" dir="ltr">${hi !== null ? `${this._t(hi, f._temperatureUnit)}°` : '--'}</div>
+        </div>
+        <div class="fc-modal-precip" dir="ltr">${f.precipitation_probability > 0 ? f.precipitation_probability + '%' : ''}</div>
       </div>`;
       })
       .join('');
@@ -10248,11 +11234,14 @@ class NimbusWeatherCard extends HTMLElement {
     }
     const displayOptions = this._activeDisplayOptions(sourceCtx);
     if (!displayOptions.show_clock) return;
-    const el = this.shadowRoot?.getElementById('det-clock');
-    if (!el) return;
     const { date, time } = this._clockParts(displayOptions.use_24h, sourceCtx, now);
-    el.querySelector('.det-clock-date').textContent = date;
-    el.querySelector('.det-clock-time').textContent = time;
+    const el = this.shadowRoot?.getElementById('det-clock');
+    if (el) {
+      el.querySelector('.det-clock-date').textContent = date;
+      el.querySelector('.det-clock-time').textContent = time;
+    }
+    const supplementalClock = this.shadowRoot?.getElementById('supplement-clock');
+    if (supplementalClock) supplementalClock.textContent = time;
   }
 
   _initDetSplash(condition) {
@@ -10743,6 +11732,14 @@ class NimbusWeatherCardEditor extends HTMLElement {
     this._config = {};
     this._abortController = null;
     this._activeSourceEditorIndex = 0;
+    this._rendered = false;
+    this._entityPickerDefinitionPending = false;
+    this._sourceExtraModeDrafts = new Map();
+    this._extraSensorDraftScopes = new Set();
+  }
+
+  connectedCallback() {
+    this._syncDirection();
   }
 
   disconnectedCallback() {
@@ -10761,16 +11758,40 @@ class NimbusWeatherCardEditor extends HTMLElement {
       );
       if (activeIndex >= 0) this._activeSourceEditorIndex = activeIndex;
     }
+    if (Array.isArray(config.local_sensors) && config.local_sensors.length) {
+      this._extraSensorDraftScopes.delete('global');
+    }
+    if (hasSources) {
+      config.sources.forEach((source, index) => {
+        if (!Array.isArray(source?.local_sensors)) return;
+        this._sourceExtraModeDrafts.delete(this._sourceExtraDraftKey(source, index));
+        this._extraSensorDraftScopes.delete(`source-${index}`);
+      });
+    }
     this._config = {
       ...config,
       sources,
+      direction: _directionConfigValue(config.direction),
     };
+    this._syncDirection();
     this._render();
   }
 
   set hass(hass) {
+    const firstHass = !this._hass && !!hass;
     this._hass = hass;
-    if (!this._rendered) this._render();
+    this._syncDirection();
+    // Home Assistant may call setConfig before assigning hass. Render once
+    // when the first real hass object arrives so fallback option lists are not
+    // permanently empty; later state updates only refresh picker properties.
+    if (!this._rendered || firstHass) this._render();
+    else this._syncExtraSensorPickers();
+  }
+
+  _syncDirection() {
+    const direction = _resolvedTextDirection('auto', this._hass, this);
+    this.setAttribute?.('dir', direction);
+    this.setAttribute?.('data-direction', direction);
   }
 
   _fire(config) {
@@ -10849,8 +11870,137 @@ class NimbusWeatherCardEditor extends HTMLElement {
   _sunEntities() {
     if (!this._hass) return [];
     return Object.keys(this._hass.states)
-      .filter((e) => e.startsWith('sun.'))
+      .filter((e) => e.startsWith('sun.'));
+  }
+
+  _extraSensorEntities() {
+    if (!this._hass) return [];
+    return Object.keys(this._hass.states)
+      .filter((entityId) => !entityId.startsWith('weather.') && !entityId.startsWith('sun.'))
       .sort();
+  }
+
+  _sourceExtraDraftKey(source, index) {
+    return source?.id ? `id:${String(source.id)}` : `index:${index}`;
+  }
+
+  _sourceExtraMode(source, index) {
+    const draft = this._sourceExtraModeDrafts.get(this._sourceExtraDraftKey(source, index));
+    if (draft === 'custom') return draft;
+    if (!Array.isArray(source?.local_sensors)) return 'inherit';
+    return source.local_sensors.length ? 'custom' : 'none';
+  }
+
+  _renderExtraSensorList(
+    sensors,
+    { scope = 'global', sourceIndex = null, disabled = false } = {},
+  ) {
+    const items = (Array.isArray(sensors) ? sensors : []).slice(
+      0,
+      NIMBUS_MAX_SUPPLEMENTAL_SENSORS,
+    );
+    if (
+      this._extraSensorDraftScopes.has(scope) &&
+      items.length < NIMBUS_MAX_SUPPLEMENTAL_SENSORS
+    ) {
+      items.push({});
+    }
+    const pickerReady = customElements.get('ha-entity-picker') !== undefined;
+    const iconPickerReady = customElements.get('ha-icon-picker') !== undefined;
+    const safeScope = this._escapeHtml(scope);
+    const sourceAttr = Number.isInteger(sourceIndex)
+      ? ` data-source-idx="${sourceIndex}"`
+      : '';
+    const disabledAttr = disabled ? ' disabled' : '';
+    const rows = items
+      .map((sensor, index) => {
+        const entity = this._escapeHtml(sensor?.entity || '');
+        const icon = this._escapeHtml(sensor?.icon || '');
+        const name = this._escapeHtml(sensor?.name || '');
+        const entityField = pickerReady
+          ? `<ha-entity-picker class="sensor-entity-picker" data-scope="${safeScope}" data-idx="${index}"${sourceAttr}${disabledAttr}></ha-entity-picker>
+             <input type="hidden" class="sensor-entity" data-scope="${safeScope}" data-idx="${index}" value="${entity}">`
+          : `<input type="text" list="entities-list" class="sensor-entity" data-scope="${safeScope}" data-idx="${index}" value="${entity}" placeholder="Search entity..." autocomplete="off"${disabledAttr}>`;
+        const iconField = iconPickerReady
+          ? `<ha-icon-picker class="sensor-icon-picker" data-scope="${safeScope}" data-idx="${index}"${sourceAttr}${disabledAttr}></ha-icon-picker>
+             <input type="hidden" class="sensor-icon" data-scope="${safeScope}" data-idx="${index}" value="${icon}">`
+          : `<input type="text" class="sensor-icon" data-scope="${safeScope}" data-idx="${index}" value="${icon}" placeholder="Auto (entity icon)"${disabledAttr}>`;
+        return `<div class="row sensor-entry" data-scope="${safeScope}" data-idx="${index}"${sourceAttr} style="flex-direction:column;align-items:stretch;gap:6px;padding-bottom:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div class="label">Sensor ${index + 1}</div>
+            <button type="button" class="remove-sensor" data-scope="${safeScope}" data-idx="${index}"${sourceAttr}${disabledAttr} style="background:none;border:none;cursor:pointer;color:var(--color-text-secondary);font-size:16px;padding:0 4px">✕</button>
+          </div>
+          ${entityField}
+          ${iconField}
+          <input type="text" class="sensor-name" data-scope="${safeScope}" data-idx="${index}" value="${name}" placeholder="Label (optional)"${disabledAttr}>
+        </div>`;
+      })
+      .join('');
+    const addId = scope === 'global' ? ' id="add-sensor"' : '';
+    const add =
+      items.length < NIMBUS_MAX_SUPPLEMENTAL_SENSORS
+        ? `<button type="button"${addId} class="add-sensor" data-scope="${safeScope}"${sourceAttr}${disabledAttr} style="width:100%;padding:8px;border-radius:8px;border:1px dashed var(--color-border-secondary);background:none;cursor:pointer;color:var(--color-text-secondary);font-size:14px">+ Add sensor</button>`
+        : '';
+    return `<div class="extra-sensor-list" data-scope="${safeScope}">${rows}${add}</div>`;
+  }
+
+  _renderSourceExtraSensors(source, index) {
+    const mode = this._sourceExtraMode(source, index);
+    const scope = `source-${index}`;
+    const hasBlankDraft = this._extraSensorDraftScopes.has(scope);
+    const customSensors = hasBlankDraft
+      ? []
+      : Array.isArray(source.local_sensors) && source.local_sensors.length
+        ? source.local_sensors
+        : [];
+    const hint =
+      mode === 'inherit'
+        ? 'Using Default Extra Sensors.'
+        : mode === 'none'
+          ? 'This source will not show the Supplemental Sensors page.'
+          : 'Custom list for this source only.';
+    return `
+      <div class="source-subsection">
+        <div class="label">Extra Sensors</div>
+        <div class="sublabel">Choose inheritance or up to five source-specific entities</div>
+      </div>
+      <div class="row source-row">
+        <div><div class="label">Sensor Set</div><div class="sublabel">${hint}</div></div>
+        <select class="source-extra-mode" data-idx="${index}">
+          <option value="inherit" ${mode === 'inherit' ? 'selected' : ''}>Use defaults</option>
+          <option value="custom" ${mode === 'custom' ? 'selected' : ''}>Custom</option>
+          <option value="none" ${mode === 'none' ? 'selected' : ''}>None</option>
+        </select>
+      </div>
+      ${
+        mode === 'custom'
+          ? this._renderExtraSensorList(customSensors, {
+              scope,
+              sourceIndex: index,
+            })
+          : ''
+      }`;
+  }
+
+  _syncExtraSensorPickers() {
+    this.shadowRoot?.querySelectorAll('.sensor-entity-picker').forEach((picker) => {
+      picker.hass = this._hass;
+    });
+  }
+
+  _scheduleEntityPickerUpgrade() {
+    if (
+      customElements.get('ha-entity-picker') ||
+      this._entityPickerDefinitionPending ||
+      typeof customElements.whenDefined !== 'function'
+    ) {
+      return;
+    }
+    this._entityPickerDefinitionPending = true;
+    customElements.whenDefined('ha-entity-picker').then(() => {
+      this._entityPickerDefinitionPending = false;
+      if (this.isConnected && this._rendered) this._render();
+    });
   }
 
   _supportsForecastType(entity, forecastType) {
@@ -10986,6 +12136,10 @@ class NimbusWeatherCardEditor extends HTMLElement {
         ${sourceToggle(index, 'show_forecast', _boolConfigValue(display.show_forecast, true))}
       </div>
       <div class="row source-row">
+        <div><div class="label">Precipitation Probability</div><div class="sublabel">Show chance of rain below forecast items</div></div>
+        ${sourceToggle(index, 'show_precipitation_probability', _boolConfigValue(display.show_precipitation_probability, false))}
+      </div>
+      <div class="row source-row">
         <div><div class="label">Details</div><div class="sublabel">Humidity, wind, pressure</div></div>
         ${sourceToggle(index, 'show_details', _boolConfigValue(display.show_details, true))}
       </div>
@@ -11050,12 +12204,13 @@ class NimbusWeatherCardEditor extends HTMLElement {
         ${renderDisplayOverrides(source, i)}
         ${renderSupplementFields(source, i, 'Station Sensors', 'Primary values for this local station tab')}`
         }
+        ${this._renderSourceExtraSensors(source, i)}
       </div>`;
     };
 
     return `
     <div class="section source-section">
-      <div class="section-title">Weather Sources <span class="section-pill">2.5.1</span></div>
+      <div class="section-title">Weather Sources <span class="section-pill">2.6.0</span></div>
       <div class="source-help">Add multiple weather integrations or keep a local station as a separate tab. If this list is empty, the legacy Weather Entity below is used.</div>
       ${
         sources.length
@@ -11070,7 +12225,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
               source.entity ||
               source.reference_entity ||
               (type === 'local' ? 'Local Station' : `Source ${i + 1}`);
-            return `<button type="button" class="source-editor-tab${i === activeIndex ? ' active' : ''}" data-idx="${i}" role="tab" aria-selected="${i === activeIndex ? 'true' : 'false'}">${this._escapeHtml(label)}</button>`;
+            return `<button type="button" class="source-editor-tab${i === activeIndex ? ' active' : ''}" data-idx="${i}" role="tab" aria-selected="${i === activeIndex ? 'true' : 'false'}" tabindex="${i === activeIndex ? '0' : '-1'}" dir="auto">${this._escapeHtml(label)}</button>`;
           })
           .join('')}
         <button type="button" class="source-editor-tab source-editor-add add-source" data-type="weather" aria-label="Add weather integration">+</button>
@@ -11100,12 +12255,10 @@ class NimbusWeatherCardEditor extends HTMLElement {
     const textSize = _textSizeConfigValue(c.text_size);
     const cardHeight = _cardHeightConfigValue(c.card_height);
     const cornerStyle = _cornerStyleConfigValue(c.corner_style);
-    const extraSensorsDisabled = !sourceEditorEnabled && this._val('show_forecast', true);
+    const direction = _directionConfigValue(c.direction);
     const extraSensorsHint = sourceEditorEnabled
-      ? 'Shown when the active source Forecast Strip is off; does not override weather values'
-      : extraSensorsDisabled
-        ? 'Disable forecast to show extra sensor rows; does not override weather values'
-        : 'Shown as additional sensor rows; does not override weather values';
+      ? 'Shown on the Supplemental Sensors page; shared by sources without their own list'
+      : 'Shown on the Supplemental Sensors page with forecast, or as rows when forecast is hidden';
 
     this.shadowRoot.innerHTML = `
 <style>
@@ -11133,13 +12286,14 @@ class NimbusWeatherCardEditor extends HTMLElement {
   }
   .toggle input:checked + .slider-track { background:var(--primary-color,#03a9f4); }
   .slider-thumb {
-    position:absolute; width:18px; height:18px; left:2px; top:2px;
+    position:absolute; width:18px; height:18px; inset-inline-start:2px; top:2px;
     background:#fff; border-radius:50%; transition:transform .2s; pointer-events:none;
   }
   .toggle input:checked ~ .slider-thumb { transform:translateX(18px); }
+  :host([dir="rtl"]) .toggle input:checked ~ .slider-thumb { transform:translateX(-18px); }
   .speed-row { display:flex; align-items:center; gap:12px; }
   .speed-row input[type=range] { flex:1; accent-color:var(--primary-color,#03a9f4); }
-  .speed-val { font-size:13px; min-width:24px; text-align:right; color:var(--secondary-text-color); }
+  .speed-val { font-size:13px; min-width:24px; text-align:end; color:var(--secondary-text-color); }
   .warning {
     margin:8px 0 4px;
     padding:8px 10px;
@@ -11151,7 +12305,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
     line-height:1.4;
   }
   .section-pill {
-    margin-left:6px; padding:2px 6px; border-radius:999px;
+    margin-inline-start:6px; padding:2px 6px; border-radius:999px;
     background:rgba(3,169,244,0.12); color:var(--primary-color,#03a9f4);
     font-size:10px; letter-spacing:.04em;
   }
@@ -11209,7 +12363,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
     cursor:pointer; color:var(--primary-text-color); font-size:12px; font-weight:600;
   }
   .source-sky-location summary span {
-    margin-left:4px; color:var(--secondary-text-color); font-weight:400;
+    margin-inline-start:4px; color:var(--secondary-text-color); font-weight:400;
   }
   .source-sky-location .sublabel { margin:7px 0 6px; }
   .source-sky-coordinate-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
@@ -11217,10 +12371,18 @@ class NimbusWeatherCardEditor extends HTMLElement {
     display:grid; gap:4px; color:var(--secondary-text-color); font-size:11px;
   }
   .source-sky-coordinate-grid input { min-width:0; box-sizing:border-box; width:100%; }
+  .source-sky-coordinate-grid input,
+  .timezone-search,
+  .timezone-option-code { direction:ltr; unicode-bidi:isolate; }
+  .extra-sensor-list { min-width:0; }
+  ha-entity-picker.sensor-entity-picker,
+  ha-icon-picker.sensor-icon-picker {
+    display:block; box-sizing:border-box; width:100%; min-width:0;
+  }
   .timezone-picker { position:relative; flex:0 1 240px; min-width:180px; }
   .timezone-picker .timezone-search { box-sizing:border-box; width:100%; min-width:0; }
   .timezone-options {
-    position:absolute; top:calc(100% + 4px); right:0; left:0; z-index:20;
+    position:absolute; top:calc(100% + 4px); inset-inline:0; z-index:20;
     max-height:216px; overflow-y:auto;
     border:1px solid var(--divider-color,#ccc); border-radius:8px;
     background:var(--card-background-color,#fff);
@@ -11230,7 +12392,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
     display:grid; width:100%; padding:8px 10px; border:0;
     border-bottom:1px solid var(--divider-color,#eee);
     background:transparent; color:var(--primary-text-color);
-    font:inherit; text-align:left; cursor:pointer;
+    font:inherit; text-align:start; cursor:pointer;
   }
   .timezone-option:last-child { border-bottom:0; }
   .timezone-option:hover, .timezone-option:focus-visible {
@@ -11336,7 +12498,7 @@ ${
     </select>
   </div>
   <div class="row">
-    <div><div class="label">Language</div><div class="sublabel">Card display language</div></div>
+    <div><div class="label">Language</div><div class="sublabel">Weather labels and dates</div></div>
     <select id="language" style="width:100%;padding:6px;border-radius:8px;border:1px solid var(--color-border-secondary);background:var(--color-background-secondary);color:var(--color-text-primary);font-size:14px">
       <option value="en" ${this._val('language', 'en') === 'en' ? 'selected' : ''}>English</option>
       <option value="es" ${this._val('language', 'en') === 'es' ? 'selected' : ''}>Espanol</option>
@@ -11345,8 +12507,23 @@ ${
     </select>
   </div>
   <div class="row">
+    <div><div class="label">Text Direction</div><div class="sublabel">Auto follows the Home Assistant interface</div></div>
+    <select id="direction">
+      <option value="auto" ${direction === 'auto' ? 'selected' : ''}>Auto</option>
+      <option value="ltr" ${direction === 'ltr' ? 'selected' : ''}>Left to right</option>
+      <option value="rtl" ${direction === 'rtl' ? 'selected' : ''}>Right to left</option>
+    </select>
+  </div>
+  <div class="row">
     <div><div class="label">Show Forecast Strip</div></div>
     ${this._toggle('show_forecast', this._val('show_forecast', true))}
+  </div>
+  <div class="row">
+    <div><div class="label">Show Precipitation Probability</div><div class="sublabel">Chance of rain below forecast items</div></div>
+    ${this._toggle(
+      'show_precipitation_probability',
+      this._val('show_precipitation_probability', false),
+    )}
   </div>
   <div class="row">
     <div><div class="label">Show Details</div><div class="sublabel">Humidity, wind, pressure</div></div>
@@ -11376,12 +12553,20 @@ ${
     </select>
   </div>
   <div class="row">
-    <div><div class="label">Language</div><div class="sublabel">Card display language</div></div>
+    <div><div class="label">Language</div><div class="sublabel">Weather labels and dates</div></div>
     <select id="language" style="width:100%;padding:6px;border-radius:8px;border:1px solid var(--color-border-secondary);background:var(--color-background-secondary);color:var(--color-text-primary);font-size:14px">
       <option value="en" ${this._val('language', 'en') === 'en' ? 'selected' : ''}>English</option>
       <option value="es" ${this._val('language', 'en') === 'es' ? 'selected' : ''}>Espanol</option>
       <option value="de" ${this._val('language', 'en') === 'de' ? 'selected' : ''}>Deutsch</option>
       <option value="nl" ${this._val('language', 'en') === 'nl' ? 'selected' : ''}>Nederlands</option>
+    </select>
+  </div>
+  <div class="row">
+    <div><div class="label">Text Direction</div><div class="sublabel">Auto follows the Home Assistant interface</div></div>
+    <select id="direction">
+      <option value="auto" ${direction === 'auto' ? 'selected' : ''}>Auto</option>
+      <option value="ltr" ${direction === 'ltr' ? 'selected' : ''}>Left to right</option>
+      <option value="rtl" ${direction === 'rtl' ? 'selected' : ''}>Right to left</option>
     </select>
   </div>
   <div class="row">
@@ -11510,58 +12695,19 @@ ${
 
 <!-- EXTRA SENSORS -->
 <datalist id="entities-list">
-  ${
-    this._hass
-      ? Object.keys(this._hass.states)
-          .filter((e) => !e.startsWith('weather.') && !e.startsWith('sun.'))
-          .sort()
-          .map((e) => `<option value="${e}">`)
-          .join('')
-      : ''
-  }
-</datalist>
-<div class="section" id="sensors-section" style="opacity:${extraSensorsDisabled ? '0.4' : '1'}">
-  <div class="section-title">Extra Sensors</div>
-  <div class="source-help">${extraSensorsHint}</div>
-  ${(c.local_sensors || [])
-    .map(
-      (s, i) => `
-  <div class="row sensor-entry" data-idx="${i}" style="flex-direction:column;align-items:stretch;gap:6px;padding-bottom:12px">
-    <div style="display:flex;align-items:center;justify-content:space-between">
-      <div class="label">Sensor ${i + 1}</div>
-      <button class="remove-sensor" data-idx="${i}" style="background:none;border:none;cursor:pointer;color:var(--color-text-secondary);font-size:16px;padding:0 4px" ${extraSensorsDisabled ? 'disabled' : ''}>✕</button>
-    </div>
-    <input type="text" list="entities-list" class="sensor-entity" data-idx="${i}" value="${s.entity || ''}" placeholder="Search entity..." ${extraSensorsDisabled ? 'disabled' : ''}>
-    ${
-      customElements.get('ha-icon-picker') !== undefined
-        ? `
-    <ha-icon-picker
-      class="sensor-icon-picker"
-      data-idx="${i}"
-      .value="${s.icon || ''}"
-      .label=${'Icon'}
-      ${extraSensorsDisabled ? 'disabled' : ''}
-      @value-changed="${(e) => {
-        const ip = this.shadowRoot.querySelector(`.sensor-icon[data-idx='${i}']`);
-        if (ip) ip.value = e.detail.value;
-      }}"
-    ></ha-icon-picker>
-    <input type="hidden" class="sensor-icon" data-idx="${i}" value="${s.icon || ''}">
-    `
-        : `
-    <input type="text" class="sensor-icon" data-idx="${i}" value="${s.icon || ''}" placeholder="mdi:thermometer" ${extraSensorsDisabled ? 'disabled' : ''}>
-    `
-    }
-    <input type="text" class="sensor-name" data-idx="${i}" value="${s.name || ''}" placeholder="Label (optional)" ${extraSensorsDisabled ? 'disabled' : ''}>
-  </div>`,
-    )
+  ${this._extraSensorEntities()
+    .map((entityId) => {
+      const friendlyName = this._hass?.states?.[entityId]?.attributes?.friendly_name || entityId;
+      return `<option value="${this._escapeHtml(entityId)}">${this._escapeHtml(friendlyName)}</option>`;
+    })
     .join('')}
-  ${
-    (c.local_sensors || []).length < 4
-      ? `
-  <button id="add-sensor" style="width:100%;padding:8px;border-radius:8px;border:1px dashed var(--color-border-secondary);background:none;cursor:pointer;color:var(--color-text-secondary);font-size:14px" ${extraSensorsDisabled ? 'disabled' : ''}>+ Add sensor</button>`
-      : ''
-  }
+</datalist>
+<div class="section" id="sensors-section">
+  <div class="section-title">Default Extra Sensors</div>
+  <div class="source-help">${extraSensorsHint}</div>
+  ${this._renderExtraSensorList(c.local_sensors, {
+    scope: 'global',
+  })}
 </div>
 
 <!-- TAP ACTION -->
@@ -11600,13 +12746,8 @@ ${
 </div>`;
 
     this._attach();
-
-    // Set hass property on entity pickers (must be done after DOM render)
-    if (this._hass) {
-      this.shadowRoot.querySelectorAll('ha-entity-picker').forEach((el) => {
-        el.hass = this._hass;
-      });
-    }
+    this._syncExtraSensorPickers();
+    this._scheduleEntityPickerUpgrade();
   }
 
   _toggle(id, checked) {
@@ -11638,16 +12779,29 @@ ${
     const urlRow = sr.getElementById('tap_action_url_row');
     if (urlRow) urlRow.style.display = tapType === 'url' ? 'flex' : 'none';
 
-    const getSensors = () => {
+    const configuredSensorsForScope = (scope) => {
+      if (scope === 'global') return this._config.local_sensors;
+      const match = String(scope).match(/^source-(\d+)$/);
+      if (!match) return [];
+      return this._config.sources?.[Number(match[1])]?.local_sensors;
+    };
+    const getSensors = (scope = 'global', omittedRow = null) => {
       const sensors = [];
       sr.querySelectorAll('.sensor-entry').forEach((row) => {
-        const idx = row.dataset.idx;
-        const entity = sr.querySelector(`.sensor-entity[data-idx="${idx}"]`)?.value;
-        const icon = sr.querySelector(`.sensor-icon[data-idx="${idx}"]`)?.value?.trim();
-        const name = sr.querySelector(`.sensor-name[data-idx="${idx}"]`)?.value?.trim();
+        if (row.dataset.scope !== scope || row === omittedRow) return;
+        const entity = row.querySelector('.sensor-entity')?.value?.trim();
+        const icon = row.querySelector('.sensor-icon')?.value?.trim();
+        const name = row.querySelector('.sensor-name')?.value?.trim();
         if (entity) sensors.push({ entity, ...(icon ? { icon } : {}), ...(name ? { name } : {}) });
       });
-      return sensors;
+      const configured = configuredSensorsForScope(scope);
+      const legacyOverflow = Array.isArray(configured)
+        ? configured.slice(NIMBUS_MAX_SUPPLEMENTAL_SENSORS)
+        : [];
+      return [
+        ...sensors.slice(0, NIMBUS_MAX_SUPPLEMENTAL_SENSORS),
+        ...legacyOverflow,
+      ];
     };
 
     const getSources = () => {
@@ -11673,6 +12827,7 @@ ${
           'forecast_type',
           'max_items',
           'show_forecast',
+          'show_precipitation_probability',
           'show_details',
           'show_clock',
           'use_24h',
@@ -11692,6 +12847,7 @@ ${
             if (Number.isFinite(n)) source[key] = n;
           } else if (
             key === 'show_forecast' ||
+            key === 'show_precipitation_probability' ||
             key === 'show_details' ||
             key === 'show_clock' ||
             key === 'use_24h'
@@ -11727,6 +12883,23 @@ ${
         }
         return source;
       };
+      const applyExtraSensors = (source, idx) => {
+        const mode =
+          sr.querySelector(`.source-extra-mode[data-idx="${idx}"]`)?.value ||
+          this._sourceExtraMode(source, Number(idx));
+        if (mode === 'inherit') {
+          delete source.local_sensors;
+          return source;
+        }
+        if (mode === 'none') {
+          source.local_sensors = [];
+          return source;
+        }
+        const customSensors = getSensors(`source-${idx}`);
+        if (customSensors.length) source.local_sensors = customSensors;
+        else delete source.local_sensors;
+        return source;
+      };
       sr.querySelectorAll('.source-entry').forEach((row) => {
         const idx = row.dataset.idx;
         const type =
@@ -11743,6 +12916,7 @@ ${
           delete source.reference_entity;
           applySupplementFields(source, idx);
           applyDisplayFields(source, idx);
+          applyExtraSensors(source, idx);
           if (entity) sources[idx] = source;
           else delete sources[idx];
           return;
@@ -11754,7 +12928,13 @@ ${
         delete source.entity;
         applySupplementFields(source, idx);
         applyDisplayFields(source, idx);
-        if (source.temperature || source.humidity || source.pressure || source.reference_entity) {
+        applyExtraSensors(source, idx);
+        if (
+          source.reference_entity ||
+          NIMBUS_LOCAL_SENSOR_KEYS.some(
+            (key) => source[key] || source[key.replace(/^local_/, '')],
+          )
+        ) {
           sources[idx] = source;
         } else {
           delete sources[idx];
@@ -11771,7 +12951,7 @@ ${
     };
     const getValue = (id, fallback = '') => sr.getElementById(id)?.value ?? fallback;
 
-    const upd = () => {
+    const upd = (fire = true) => {
       const entity = sr.getElementById('entity')?.value?.trim() || this._config.entity || '';
       const showForecast = sr.getElementById('show_forecast')
         ? getChecked('show_forecast', true)
@@ -11786,10 +12966,14 @@ ${
         forecast_type: getValue('forecast_type', this._config.forecast_type || 'daily'),
         max_items: Number.isFinite(maxItemsValue) ? maxItemsValue : this._config.max_items || 5,
         language: this.shadowRoot.getElementById('language')?.value || 'en',
+        direction: _directionConfigValue(getValue('direction', this._config.direction)),
         text_size: _textSizeConfigValue(getValue('text_size', this._config.text_size)),
         card_height: _cardHeightConfigValue(getValue('card_height', this._config.card_height)),
         corner_style: _cornerStyleConfigValue(getValue('corner_style', this._config.corner_style)),
         show_forecast: showForecast,
+        show_precipitation_probability: sr.getElementById('show_precipitation_probability')
+          ? getChecked('show_precipitation_probability', false)
+          : _boolConfigValue(this._config.show_precipitation_probability, false),
         show_details: sr.getElementById('show_details')
           ? getChecked('show_details', true)
           : this._config.show_details !== false,
@@ -11822,7 +13006,7 @@ ${
         ufo_easter_egg: getChecked('ufo_easter_egg', true),
         animation_speed: getChecked('animation_speed', true) ? 1 : 0,
         latitude_zone: sr.getElementById('latitude_zone')?.value || 'northern_temperate',
-        local_sensors: getSensors(),
+        local_sensors: getSensors('global'),
       };
       if (timeZone) cfg.time_zone = timeZone;
       else delete cfg.time_zone;
@@ -11845,6 +13029,7 @@ ${
           'forecast_type',
           'max_items',
           'show_forecast',
+          'show_precipitation_probability',
           'show_details',
           'show_clock',
           'use_24h',
@@ -11881,14 +13066,95 @@ ${
       const urlRowEl = sr.getElementById('tap_action_url_row');
       if (urlRowEl) urlRowEl.style.display = tapType === 'url' ? 'flex' : 'none';
       this._config = cfg;
-      this._fire(cfg);
+      if (fire) this._fire(cfg);
+      return cfg;
     };
 
     sr.querySelectorAll(
-      'select, input[type="text"]:not(.timezone-search):not(.source-sky-coordinate), input[type="checkbox"], input[type="range"]',
+      'select:not(.source-extra-mode), input[type="text"]:not(.timezone-search):not(.source-sky-coordinate), input[type="checkbox"], input[type="range"]',
     ).forEach((el) => {
-      el.addEventListener('change', upd, { signal });
-      if (el.type === 'range') el.addEventListener('input', upd, { signal });
+      el.addEventListener('change', () => upd(), { signal });
+      if (el.type === 'range') el.addEventListener('input', () => upd(), { signal });
+    });
+
+    // Home Assistant's entity picker searches entity ids, friendly names and
+    // registry metadata. The hidden input remains the serialized source of
+    // truth so the same scoped reader also works with the native fallback.
+    sr.querySelectorAll('.sensor-entity-picker').forEach((picker) => {
+      const row = picker.closest('.sensor-entry');
+      const hidden = row?.querySelector('.sensor-entity');
+      const scope = row?.dataset.scope || 'global';
+      picker.hass = this._hass;
+      picker.value = hidden?.value || '';
+      picker.label = 'Entity';
+      picker.placeholder = 'Search entity';
+      picker.allowCustomEntity = true;
+      picker.excludeDomains = ['weather', 'sun'];
+      picker.disabled = picker.hasAttribute('disabled');
+      picker.addEventListener(
+        'value-changed',
+        (event) => {
+          event.stopPropagation();
+          if (!hidden) return;
+          const value = String(event.detail?.value || '').trim();
+          if (hidden.value === value) return;
+          hidden.value = value;
+          if (value) this._extraSensorDraftScopes.delete(scope);
+          else this._extraSensorDraftScopes.add(scope);
+          const cfg = upd();
+          const sourceIndex = parseInt(row?.dataset.sourceIdx, 10);
+          if (value && Number.isFinite(sourceIndex)) {
+            const source = cfg.sources?.[sourceIndex] || {};
+            this._sourceExtraModeDrafts.delete(
+              this._sourceExtraDraftKey(source, sourceIndex),
+            );
+          }
+        },
+        { signal },
+      );
+    });
+
+    sr.querySelectorAll('input.sensor-entity[list="entities-list"]').forEach((input) => {
+      input.addEventListener(
+        'change',
+        () => {
+          const scope = input.closest('.sensor-entry')?.dataset.scope || 'global';
+          const value = input.value.trim();
+          if (value) this._extraSensorDraftScopes.delete(scope);
+          else this._extraSensorDraftScopes.add(scope);
+          const sourceIndex = parseInt(input.closest('.sensor-entry')?.dataset.sourceIdx, 10);
+          if (value && Number.isFinite(sourceIndex)) {
+            const source = this._config.sources?.[sourceIndex] || {};
+            this._sourceExtraModeDrafts.delete(
+              this._sourceExtraDraftKey(source, sourceIndex),
+            );
+          }
+        },
+        { signal },
+      );
+    });
+
+    // This editor renders with innerHTML rather than Lit, so icon pickers need
+    // real property assignment and event listeners. A blank value means Auto:
+    // the card lets Home Assistant resolve the icon from the entity state.
+    sr.querySelectorAll('.sensor-icon-picker').forEach((picker) => {
+      const hidden = picker.closest('.sensor-entry')?.querySelector('.sensor-icon');
+      picker.hass = this._hass;
+      picker.value = hidden?.value || '';
+      picker.label = 'Icon (optional — Auto if blank)';
+      picker.disabled = picker.hasAttribute('disabled');
+      picker.addEventListener(
+        'value-changed',
+        (event) => {
+          event.stopPropagation();
+          if (!hidden) return;
+          const value = event.detail?.value || '';
+          if (hidden.value === value) return;
+          hidden.value = value;
+          upd();
+        },
+        { signal },
+      );
     });
 
     // Latitude and longitude are a single atomic override. Let the user tab
@@ -12022,6 +13288,33 @@ ${
       );
     });
 
+    sr.querySelectorAll('.source-extra-mode').forEach((select) => {
+      select.addEventListener(
+        'change',
+        () => {
+          const idx = parseInt(select.dataset.idx, 10);
+          if (!Number.isFinite(idx)) return;
+          const currentSource = this._config.sources?.[idx] || {};
+          const mode = select.value;
+          const scope = `source-${idx}`;
+          const draftKey = this._sourceExtraDraftKey(currentSource, idx);
+          if (mode === 'custom') this._sourceExtraModeDrafts.set(draftKey, mode);
+          else this._sourceExtraModeDrafts.delete(draftKey);
+          this._extraSensorDraftScopes.delete(scope);
+
+          const cfg = upd(false);
+          const source = cfg.sources?.[idx];
+          if (source && mode === 'custom' && !Array.isArray(source.local_sensors)) {
+            this._extraSensorDraftScopes.add(scope);
+          }
+          this._config = cfg;
+          this._render();
+          this._fire(cfg);
+        },
+        { signal },
+      );
+    });
+
     sr.querySelectorAll('.source-type').forEach((el) => {
       el.addEventListener(
         'change',
@@ -12032,34 +13325,76 @@ ${
       );
     });
 
-    sr.querySelectorAll('.source-editor-tab').forEach((btn) => {
+    const sourceEditorTabs = [...sr.querySelectorAll('.source-editor-tab[data-idx]')];
+    const focusSourceEditorTab = (btn) => {
+      if (!btn) return;
+      sourceEditorTabs.forEach((candidate) => {
+        candidate.tabIndex = candidate === btn ? 0 : -1;
+      });
+      btn.focus?.({ preventScroll: true });
+      btn.scrollIntoView?.({ inline: 'nearest', block: 'nearest' });
+    };
+    const activateSourceEditorTab = (btn, preserveFocus = false) => {
+      const idx = parseInt(btn?.dataset?.idx, 10);
+      if (!Number.isFinite(idx)) return;
+      if (preserveFocus) this._pendingSourceEditorFocusIndex = idx;
+      if (idx === this._activeSourceEditorIndex) {
+        this._pendingSourceEditorFocusIndex = null;
+        if (preserveFocus) focusSourceEditorTab(btn);
+        return;
+      }
+      const sources = getSources();
+      this._activeSourceEditorIndex = Math.min(
+        Math.max(idx, 0),
+        Math.max(sources.length - 1, 0),
+      );
+      this._config = { ...this._config };
+      if (sources.length) {
+        this._config.sources = sources;
+        this._config.active_source = _weatherSourceId(
+          sources[this._activeSourceEditorIndex],
+          this._activeSourceEditorIndex,
+        );
+      } else {
+        delete this._config.sources;
+        delete this._config.active_source;
+      }
+      this._render();
+      this._fire(this._config);
+    };
+    sourceEditorTabs.forEach((btn) => {
+      btn.addEventListener('click', () => activateSourceEditorTab(btn), { signal });
       btn.addEventListener(
-        'click',
-        () => {
-          const idx = parseInt(btn.dataset.idx, 10);
-          if (!Number.isFinite(idx) || idx === this._activeSourceEditorIndex) return;
-          const sources = getSources();
-          this._activeSourceEditorIndex = Math.min(
-            Math.max(idx, 0),
-            Math.max(sources.length - 1, 0),
-          );
-          this._config = { ...this._config };
-          if (sources.length) {
-            this._config.sources = sources;
-            this._config.active_source = _weatherSourceId(
-              sources[this._activeSourceEditorIndex],
-              this._activeSourceEditorIndex,
-            );
-          } else {
-            delete this._config.sources;
-            delete this._config.active_source;
+        'keydown',
+        (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            activateSourceEditorTab(btn, true);
+            return;
           }
-          this._render();
-          this._fire(this._config);
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+          event.preventDefault();
+          const current = Math.max(0, sourceEditorTabs.indexOf(btn));
+          let next = current;
+          if (event.key === 'Home') next = 0;
+          else if (event.key === 'End') next = sourceEditorTabs.length - 1;
+          else {
+            const physicalStep = event.key === 'ArrowRight' ? 1 : -1;
+            const logicalStep = physicalStep * (this.getAttribute?.('dir') === 'rtl' ? -1 : 1);
+            next = (current + logicalStep + sourceEditorTabs.length) % sourceEditorTabs.length;
+          }
+          focusSourceEditorTab(sourceEditorTabs[next]);
         },
         { signal },
       );
     });
+    if (Number.isFinite(this._pendingSourceEditorFocusIndex)) {
+      const pending = sourceEditorTabs.find(
+        (btn) => Number(btn.dataset.idx) === this._pendingSourceEditorFocusIndex,
+      );
+      this._pendingSourceEditorFocusIndex = null;
+      focusSourceEditorTab(pending);
+    }
 
     sr.querySelectorAll('.add-source').forEach((btn) => {
       btn.addEventListener(
@@ -12116,6 +13451,10 @@ ${
         () => {
           const idx = parseInt(btn.dataset.idx);
           const sources = getSources().filter((_, i) => i !== idx);
+          // Index-based transient drafts cannot be safely reassigned after a
+          // structural delete. Serialized source settings remain untouched.
+          this._sourceExtraModeDrafts.clear();
+          this._extraSensorDraftScopes.clear();
           this._activeSourceEditorIndex = Math.min(
             this._activeSourceEditorIndex,
             Math.max(sources.length - 1, 0),
@@ -12138,25 +13477,70 @@ ${
       );
     });
 
-    // Add sensor button
-    sr.getElementById('add-sensor')?.addEventListener('click', () => {
-      const sensors = getSensors();
-      if (sensors.length >= 4) return;
-      sensors.push({ entity: '', icon: 'mdi:gauge', name: '' });
-      this._config = { ...this._config, local_sensors: sensors };
-      this._render();
-      this._fire(this._config);
+    // A newly added row is an editor-only draft until it has an entity. This
+    // prevents blank placeholder objects from leaking into saved YAML.
+    sr.querySelectorAll('.add-sensor').forEach((btn) => {
+      btn.addEventListener(
+        'click',
+        () => {
+          const scope = btn.dataset.scope || 'global';
+          const rows = [...sr.querySelectorAll('.sensor-entry')].filter(
+            (row) => row.dataset.scope === scope,
+          );
+          const blankRow = rows.find(
+            (row) => !String(row.querySelector('.sensor-entity')?.value || '').trim(),
+          );
+          if (blankRow) {
+            blankRow.querySelector('.sensor-entity-picker, .sensor-entity')?.focus?.();
+            return;
+          }
+          if (rows.length >= NIMBUS_MAX_SUPPLEMENTAL_SENSORS) return;
+          upd(false);
+          this._extraSensorDraftScopes.add(scope);
+          this._render();
+          queueMicrotask(() => {
+            const nextRows = [...this.shadowRoot.querySelectorAll('.sensor-entry')].filter(
+              (row) => row.dataset.scope === scope,
+            );
+            nextRows.at(-1)?.querySelector('.sensor-entity-picker, .sensor-entity')?.focus?.();
+          });
+        },
+        { signal },
+      );
     });
 
-    // Remove sensor buttons
     sr.querySelectorAll('.remove-sensor').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const idx = parseInt(btn.dataset.idx);
-        const sensors = getSensors().filter((_, i) => i !== idx);
-        this._config = { ...this._config, local_sensors: sensors };
-        this._render();
-        this._fire(this._config);
-      });
+      btn.addEventListener(
+        'click',
+        () => {
+          const scope = btn.dataset.scope || 'global';
+          const row = btn.closest('.sensor-entry');
+          const sensors = getSensors(scope, row);
+          const cfg = upd(false);
+          this._extraSensorDraftScopes.delete(scope);
+          if (scope === 'global') {
+            cfg.local_sensors = sensors;
+          } else {
+            const sourceIndex = parseInt(btn.dataset.sourceIdx, 10);
+            const source = cfg.sources?.[sourceIndex];
+            if (source) {
+              if (sensors.length) source.local_sensors = sensors;
+              else {
+                delete source.local_sensors;
+                this._sourceExtraModeDrafts.set(
+                  this._sourceExtraDraftKey(source, sourceIndex),
+                  'custom',
+                );
+                this._extraSensorDraftScopes.add(scope);
+              }
+            }
+          }
+          this._config = cfg;
+          this._render();
+          this._fire(cfg);
+        },
+        { signal },
+      );
     });
   }
 }
