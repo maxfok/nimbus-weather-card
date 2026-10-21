@@ -47,6 +47,12 @@ That same idea shaped the rest of this release: keep the weather scene intact, m
 
 Thank you to everyone who tested Nimbus, reported the awkward bits, suggested improvements, and helped shape where the card went next.
 
+## What's new in v2.6.1
+
+- Optional **Precipitation Amount** in the daily/hourly forecast strip, independent of probability.
+- Displays zero and decimal amounts using the active weather entity's units (`mm` or `in`). Missing data stays blank.
+- Enable **Precipitation Amount** for a weather source in the visual editor, or set `show_precipitation_amount: true` at root/source level. Disabled by default.
+
 ## What's new in v2.6.0
 
 - Source-aware Forecast/Sensors pages with a fixed outer card and remembered page state per weather source.
@@ -208,6 +214,8 @@ sources:
 
 Nimbus only renders the row when at least one displayed forecast item contains a valid numeric `precipitation_probability`. A value of `0` is valid. Availability depends on the weather integration and forecast mode.
 
+For providers such as Met.no that return amounts without probability, enable `show_precipitation_amount: true`. The strip reads `precipitation` independently from `precipitation_probability`, preserves `0` and decimals, and leaves missing values blank. It follows the active weather entity's `precipitation_unit`; unsupported or missing units are not guessed. Both options may be enabled to show two separate lines. Sunrise/sunset tiles retain the amount from the hourly slot they replace. These switches apply to the forecast strip; the expanded forecast dialog retains its existing behavior.
+
 ### Right-to-left layout
 
 ```yaml
@@ -256,6 +264,7 @@ Saved source and carousel choices use the browser's local storage, so they are l
 | `max_items` | `5` | Forecast strip items, clamped to `1`–`7`. |
 | `show_forecast` | `true` | Show the forecast strip. |
 | `show_precipitation_probability` | `false` | Show precipitation probability below supported forecast items. |
+| `show_precipitation_amount` | `false` | Show forecast precipitation amount, including zero, in the forecast strip. Uses the active weather entity precipitation unit (`mm` or `in`). |
 | `show_details` | `true` | Show humidity, wind, pressure, and other available detail values. |
 | `show_clock` | `false` | Show the date and time in the details panel. |
 | `use_24h` | `true` | Use 24-hour time in forecasts and the clock. |
@@ -311,7 +320,7 @@ tap_action:
 | `temperature`, `humidity`, `wind_speed`, `wind_direction` | both | Source-local sensor entities. |
 | `precipitation`, `pressure`, `uv`, `feels_like`, `condition` | both | Additional source-local sensor entities. |
 | `forecast_type`, `max_items` | both | Per-source forecast strip overrides. |
-| `show_forecast`, `show_precipitation_probability` | both | Per-source forecast visibility overrides. |
+| `show_forecast`, `show_precipitation_probability`, `show_precipitation_amount` | both | Per-source forecast visibility overrides. |
 | `show_details`, `show_clock`, `use_24h`, `wind_unit` | both | Per-source presentation overrides. |
 | `time_zone` | both | Per-source IANA zone; takes precedence over the root `time_zone`. |
 | `sky_latitude`, `sky_longitude` | both | Optional exact coordinate pair for source-local solar and lunar context. |
@@ -350,7 +359,7 @@ This mode remains supported for existing YAML. New multi-location setups are usu
 1. Confirm HACS shows the expected release.
 2. Refresh the Home Assistant frontend after updating the resource; a server restart is not normally required.
 3. If the old card remains, hard-refresh the browser, clear the companion-app frontend cache, or restart the wall-panel browser.
-4. For a manual resource, verify that the registered dashboard resource URL points to `/local/nimbus-weather-card.js`. Add a temporary query to that registered URL, for example `/local/nimbus-weather-card.js?v=2.6.0`, to invalidate an old browser cache.
+4. For a manual resource, verify that the registered dashboard resource URL points to `/local/nimbus-weather-card.js`. Add a temporary query to that registered URL, for example `/local/nimbus-weather-card.js?v=2.6.1`, to invalidate an old browser cache.
 
 ### Forecast or precipitation values are missing
 

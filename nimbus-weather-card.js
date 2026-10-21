@@ -1,4 +1,4 @@
-// Nimbus Weather Card v2.6.0
+// Nimbus Weather Card v2.6.1
 // https://github.com/maxfok/nimbus-weather-card
 // (c) 2024 Gerasimos Fokaefs — MIT License
 
@@ -2325,6 +2325,10 @@ function _sourceDisplayDefaultsFromConfig(config = {}) {
       config.show_precipitation_probability,
       false,
     ),
+    show_precipitation_amount: _boolConfigValue(
+      config.show_precipitation_amount,
+      false,
+    ),
     show_details: _boolConfigValue(config.show_details, true),
     show_clock: _boolConfigValue(config.show_clock, false),
     use_24h: _boolConfigValue(config.use_24h, true),
@@ -2377,6 +2381,10 @@ function _sourceWithDisplayDefaults(source = {}, config = {}) {
   next.show_precipitation_probability = _boolConfigValue(
     next.show_precipitation_probability,
     defaults.show_precipitation_probability,
+  );
+  next.show_precipitation_amount = _boolConfigValue(
+    next.show_precipitation_amount,
+    defaults.show_precipitation_amount,
   );
   next.show_details = _boolConfigValue(next.show_details, defaults.show_details);
   next.show_clock = _boolConfigValue(next.show_clock, defaults.show_clock);
@@ -2663,6 +2671,10 @@ class NimbusWeatherCard extends HTMLElement {
       show_forecast: config.show_forecast !== false,
       show_precipitation_probability: _boolConfigValue(
         config.show_precipitation_probability,
+        false,
+      ),
+      show_precipitation_amount: _boolConfigValue(
+        config.show_precipitation_amount,
         false,
       ),
       show_details: config.show_details !== false,
@@ -3243,6 +3255,14 @@ class NimbusWeatherCard extends HTMLElement {
           source,
           'show_precipitation_probability',
           defaults.show_precipitation_probability,
+        ),
+        false,
+      ),
+      show_precipitation_amount: _boolConfigValue(
+        _sourceDisplayValue(
+          source,
+          'show_precipitation_amount',
+          defaults.show_precipitation_amount,
         ),
         false,
       ),
@@ -9526,6 +9546,28 @@ class NimbusWeatherCard extends HTMLElement {
     return v === null ? '--' : Math.round(v);
   }
 
+  _forecastPrecipitationAmount(item) {
+    const value = item?._isSunEvent ? item._slotPrecipitationAmount : item?.precipitation;
+    if (typeof value !== 'number' && typeof value !== 'string') return null;
+    const normalized = typeof value === 'string' ? value.trim().replace(',', '.') : value;
+    if (normalized === '') return null;
+    const amount = Number(normalized);
+    return Number.isFinite(amount) && amount >= 0 ? amount : null;
+  }
+
+  _renderForecastAmount(item, showRow, sourceCtx) {
+    if (!showRow) return '';
+    const amount = this._forecastPrecipitationAmount(item);
+    if (amount === null) return '<div class="fp" aria-hidden="true"></div>';
+    const entity = sourceCtx?.weatherEntity || this._config?.entity;
+    const rawUnit = this._hass?.states?.[entity]?.attributes?.precipitation_unit;
+    // HA weather forecasts use the weather entity's precipitation unit.
+    const unit = rawUnit === 'in' ? 'in' : rawUnit === 'mm' ? 'mm' : null;
+    if (!unit) return '<div class="fp" aria-hidden="true"></div>';
+    const label = `${Number(amount.toFixed(2))} ${unit}`;
+    return `<div class="fp bidi-ltr" dir="ltr" role="img" aria-label="Precipitation amount ${label}"><span class="fp-icon" aria-hidden="true">${MDI.precipitation}</span><span class="fp-value" aria-hidden="true">${label}</span></div>`;
+  }
+
   _forecastPrecipitationProbability(item) {
     const value = item?._isSunEvent
       ? item._slotPrecipitationProbability
@@ -10357,6 +10399,7 @@ class NimbusWeatherCard extends HTMLElement {
       if (slot) {
         s._slotTemp = slot.temperature;
         s._slotPrecipitationProbability = slot.precipitation_probability;
+        s._slotPrecipitationAmount = slot.precipitation;
         s._temperatureUnit = slot._temperatureUnit;
       }
     });
@@ -10378,11 +10421,12 @@ class NimbusWeatherCard extends HTMLElement {
 
   _renderForecastTile(
     f,
-    { mainType, displayOptions, moonPhase, moonFraction, sourceCtx, showPrecipitationRow = false },
+    { mainType, displayOptions, moonPhase, moonFraction, sourceCtx, showPrecipitationRow = false, showAmountRow = false },
   ) {
     const day = this._day(f.datetime, mainType, displayOptions.use_24h, sourceCtx);
     const forecastMoon = this._moonSnapshot(f.datetime, moonPhase, moonFraction);
-    const precipitation = this._renderForecastPrecipitation(f, showPrecipitationRow);
+    const precipitation = this._renderForecastPrecipitation(f, showPrecipitationRow)
+      + this._renderForecastAmount(f, showAmountRow, sourceCtx);
     if (f._isSunEvent) {
       const sunTime = this._formatEventTime(
         f._exactTime || f.datetime,
@@ -10419,7 +10463,9 @@ class NimbusWeatherCard extends HTMLElement {
     const showPrecipitationRow =
       displayOptions.show_precipitation_probability &&
       forecastItems.some((item) => this._forecastPrecipitationProbability(item) !== null);
-    const tileView = { ...view, showPrecipitationRow };
+    const showAmountRow = displayOptions.show_precipitation_amount &&
+      forecastItems.some((item) => this._forecastPrecipitationAmount(item) !== null);
+    const tileView = { ...view, showPrecipitationRow, showAmountRow };
     const tiles = forecastItems
       .map((f) => this._renderForecastTile(f, tileView))
       .join('');
@@ -12140,6 +12186,10 @@ class NimbusWeatherCardEditor extends HTMLElement {
         ${sourceToggle(index, 'show_precipitation_probability', _boolConfigValue(display.show_precipitation_probability, false))}
       </div>
       <div class="row source-row">
+        <div><div class="label">Precipitation Amount</div><div class="sublabel">Show forecast precipitation amount, including zero</div></div>
+        ${sourceToggle(index, 'show_precipitation_amount', _boolConfigValue(display.show_precipitation_amount, false))}
+      </div>
+      <div class="row source-row">
         <div><div class="label">Details</div><div class="sublabel">Humidity, wind, pressure</div></div>
         ${sourceToggle(index, 'show_details', _boolConfigValue(display.show_details, true))}
       </div>
@@ -12210,7 +12260,7 @@ class NimbusWeatherCardEditor extends HTMLElement {
 
     return `
     <div class="section source-section">
-      <div class="section-title">Weather Sources <span class="section-pill">2.6.0</span></div>
+      <div class="section-title">Weather Sources <span class="section-pill">2.6.1</span></div>
       <div class="source-help">Add multiple weather integrations or keep a local station as a separate tab. If this list is empty, the legacy Weather Entity below is used.</div>
       ${
         sources.length
@@ -12526,6 +12576,13 @@ ${
     )}
   </div>
   <div class="row">
+    <div><div class="label">Show Precipitation Amount</div><div class="sublabel">Forecast precipitation amount, including zero</div></div>
+    ${this._toggle(
+      'show_precipitation_amount',
+      this._val('show_precipitation_amount', false),
+    )}
+  </div>
+  <div class="row">
     <div><div class="label">Show Details</div><div class="sublabel">Humidity, wind, pressure</div></div>
     ${this._toggle('show_details', this._val('show_details', true))}
   </div>
@@ -12828,6 +12885,7 @@ ${
           'max_items',
           'show_forecast',
           'show_precipitation_probability',
+          'show_precipitation_amount',
           'show_details',
           'show_clock',
           'use_24h',
@@ -12848,6 +12906,7 @@ ${
           } else if (
             key === 'show_forecast' ||
             key === 'show_precipitation_probability' ||
+            key === 'show_precipitation_amount' ||
             key === 'show_details' ||
             key === 'show_clock' ||
             key === 'use_24h'
@@ -12974,6 +13033,9 @@ ${
         show_precipitation_probability: sr.getElementById('show_precipitation_probability')
           ? getChecked('show_precipitation_probability', false)
           : _boolConfigValue(this._config.show_precipitation_probability, false),
+        show_precipitation_amount: sr.getElementById('show_precipitation_amount')
+          ? getChecked('show_precipitation_amount', false)
+          : _boolConfigValue(this._config.show_precipitation_amount, false),
         show_details: sr.getElementById('show_details')
           ? getChecked('show_details', true)
           : this._config.show_details !== false,
@@ -13030,6 +13092,7 @@ ${
           'max_items',
           'show_forecast',
           'show_precipitation_probability',
+          'show_precipitation_amount',
           'show_details',
           'show_clock',
           'use_24h',

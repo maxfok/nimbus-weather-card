@@ -428,3 +428,108 @@ test('hourly sunrise or sunset tiles retain the replaced slot precipitation prob
   assert.match(markup, /61%/);
   assert.doesNotMatch(markup, /undefined%|NaN%/);
 });
+
+test('precipitation amounts preserve zero and decimals and reject missing or invalid data', () => {
+  const card = prepareForecastCard();
+  for (const value of [null, undefined, '', 'unknown', -1, Infinity, true]) {
+    assert.equal(card._forecastPrecipitationAmount({ precipitation: value }), null);
+  }
+  assert.equal(card._forecastPrecipitationAmount({ precipitation: 0 }), 0);
+  assert.equal(card._forecastPrecipitationAmount({ precipitation: '0,5' }), 0.5);
+  assert.equal(card._forecastPrecipitationAmount({ _isSunEvent: true, _slotPrecipitationAmount: 0.2 }), 0.2);
+});
+
+test('amount option is independent, opt-in, source-local and preserves weather units', () => {
+  const card = prepareForecastCard();
+  assert.equal(helpers._sourceDisplayDefaultsFromConfig({}).show_precipitation_amount, false);
+  card.setConfig({ entity: 'weather.home', sources: [
+    { id: 'wet', entity: 'weather.home', show_precipitation_amount: true },
+    { id: 'other', entity: 'weather.other', show_precipitation_amount: false },
+  ] });
+  assert.equal(card._config.sources[0].show_precipitation_amount, true);
+  assert.equal(card._config.sources[1].show_precipitation_amount, false);
+  card._hass = { states: { 'weather.home': { attributes: { precipitation_unit: 'mm' } } } };
+  const view = forecastView([{ datetime: '2026-10-22T13:00:00Z', temperature: 20, precipitation: 0 }], false);
+  view.sourceCtx.weatherEntity = 'weather.home';
+  view.displayOptions.show_precipitation_amount = true;
+  assert.match(card._renderForecastStrip(view), /Precipitation amount 0 mm/);
+  view.items[0].precipitation = 0.5;
+  assert.match(card._renderForecastStrip(view), /0.5 mm/);
+  card._hass.states['weather.home'].attributes.precipitation_unit = 'in';
+  assert.match(card._renderForecastStrip(view), /0.5 in/);
+  view.displayOptions.show_precipitation_amount = false;
+  assert.doesNotMatch(card._renderForecastStrip(view), /Precipitation amount/);
+});
+
+function makeAmountEditorShadow({ sourceMode = false, checked = true } = {}) {
+  const toggle = new FakeControl({
+    type: 'checkbox',
+    checked,
+    dataset: sourceMode
+      ? { idx: '0', key: 'show_precipitation_amount' }
+      : {},
+  });
+  const entity = new FakeControl({ value: 'weather.home' });
+  const sourceType = new FakeControl({ value: 'weather' });
+  const sourceName = new FakeControl({ value: 'Home' });
+  const sourceEntity = new FakeControl({ value: 'weather.home' });
+  const sourceEntry = { dataset: { idx: '0' } };
+
+  return {
+    toggle,
+    getElementById(id) {
+      if (id === 'entity') return entity;
+      if (!sourceMode && id === 'show_precipitation_amount') return toggle;
+      return null;
+    },
+    querySelector(selector) {
+      if (!sourceMode) return null;
+      if (selector === '.source-type[data-idx="0"]') return sourceType;
+      if (selector === '.source-name[data-idx="0"]') return sourceName;
+      if (selector === '.source-entity[data-idx="0"]') return sourceEntity;
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === '.sensor-entry') return [];
+      if (selector === '.source-entry') return sourceMode ? [sourceEntry] : [];
+      if (selector === '.source-display-toggle[data-idx="0"]') {
+        return sourceMode ? [toggle] : [];
+      }
+      if (
+        selector ===
+        'select:not(.source-extra-mode), input[type="text"]:not(.timezone-search):not(.source-sky-coordinate), input[type="checkbox"], input[type="range"]'
+      ) {
+        return [toggle];
+      }
+      return [];
+    },
+  };
+}
+
+test('amount editor serialization preserves the option at root or per source without leaking both', () => {
+  const rootEditor = new Editor();
+  const rootShadow = makeAmountEditorShadow({ checked: true });
+  rootEditor.shadowRoot = rootShadow;
+  rootEditor._config = { entity: 'weather.home' };
+  rootEditor._attach();
+  rootShadow.toggle.emit('change');
+  assert.equal(rootEditor._config.show_precipitation_amount, true);
+
+  const sourceEditor = new Editor();
+  const sourceShadow = makeAmountEditorShadow({ sourceMode: true, checked: true });
+  sourceEditor.shadowRoot = sourceShadow;
+  sourceEditor._config = {
+    entity: 'weather.home',
+    sources: [{ id: 'home', type: 'weather', entity: 'weather.home' }],
+  };
+  sourceEditor._attach();
+  sourceShadow.toggle.emit('change');
+
+  const serialized = plain(sourceEditor._config);
+  assert.equal(serialized.sources[0].show_precipitation_amount, true);
+  assert.equal(
+    Object.hasOwn(serialized, 'show_precipitation_amount'),
+    false,
+    'source mode must not retain an ambiguous root setting',
+  );
+});
