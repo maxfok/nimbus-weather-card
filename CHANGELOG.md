@@ -4,6 +4,15 @@ Notable changes to Nimbus Weather Card are recorded here. Nimbus follows semanti
 
 ## [Unreleased]
 
+## [v2.6.1] — 2026-10-21
+
+### Added
+
+- Independent opt-in `show_precipitation_amount` for daily and hourly forecast strips, available at root and per-source level in YAML and the visual editor.
+- Zero and decimal precipitation amounts using the active weather entity's `mm` or `in` units. Missing or invalid amounts stay blank.
+- Hourly sunrise/sunset tiles preserve the precipitation amount of the replaced forecast slot.
+- Regression coverage for amount parsing, independent source options, editor persistence, and units.
+
 ## [v2.6.0] — 2026-10-08
 
 ### Added
@@ -170,7 +179,8 @@ Notable changes to Nimbus Weather Card are recorded here. Nimbus follows semanti
 - Dynamic solar gradient based on sun elevation.
 - Textured moon rendering with hemisphere-aware orientation.
 
-[Unreleased]: https://github.com/maxfok/nimbus-weather-card/compare/v2.6.0...HEAD
+[Unreleased]: https://github.com/maxfok/nimbus-weather-card/compare/v2.6.1...HEAD
+[v2.6.1]: https://github.com/maxfok/nimbus-weather-card/compare/v2.6.0...v2.6.1
 [v2.6.0]: https://github.com/maxfok/nimbus-weather-card/compare/v2.5.1...v2.6.0
 [v2.5.1]: https://github.com/maxfok/nimbus-weather-card/releases/tag/v2.5.1
 [v2.5.0]: https://github.com/maxfok/nimbus-weather-card/releases/tag/v2.5.0
