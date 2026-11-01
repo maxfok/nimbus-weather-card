@@ -193,7 +193,7 @@ test('card height normalizes to a safe default and only requests fill in a Panel
   assert.equal(card._panelFillRequested(), false);
 });
 
-test('text direction defaults safely, supports explicit overrides, and stays language-independent', () => {
+test('text direction defaults safely and Persian auto direction respects explicit overrides', () => {
   const Card = loadCardClass();
   const card = new Card();
   const { _directionConfigValue, _resolvedTextDirection } = Card.__nimbusTestHelpers;
@@ -205,7 +205,12 @@ test('text direction defaults safely, supports explicit overrides, and stays lan
 
   card.setConfig({ entity: 'weather.home', language: 'fa' });
   assert.equal(card._config.language, 'fa');
+  assert.equal(card.getAttribute('dir'), 'rtl');
+  card.setConfig({ entity: 'weather.home', language: 'fa', direction: 'ltr' });
   assert.equal(card.getAttribute('dir'), 'ltr');
+  assert.equal(card._forecastTitle('hourly'), 'پیش‌بینی ساعتی');
+  assert.equal(card._tr('No available data'), 'داده‌ای در دسترس نیست');
+  assert.equal(card._tr('Untranslated'), 'Untranslated');
 
   card.setConfig({ entity: 'weather.home', direction: 'RTL' });
   assert.equal(card._config.direction, 'rtl');
@@ -662,4 +667,36 @@ test('moon enters visibly and promptly at the Nimbus night handoff', () => {
   assert.match(source, /NIMBUS_LUNAR_ENTRY_TRANSITION_MS = 800/);
   assert.match(source, /`opacity \$\{NIMBUS_LUNAR_ENTRY_TRANSITION_MS\}ms ease`/);
   assert.equal(source.includes("opacity 24s ease"), false);
+});
+
+test('Persian labels and digits are local to Persian and retain Gregorian dates', () => {
+  const Card = loadCardClass();
+  const card = new Card();
+  card.setConfig({ entity: 'weather.home', language: 'fa' });
+  card._isNight = () => false;
+  assert.equal(card._condLabel('rainy'), 'بارانی');
+  assert.equal(card._digits('12:34'), '۱۲:۳۴');
+  assert.equal(card._t(16, 'C'), '۱۶');
+  assert.equal(card._fmt(89), '۸۹');
+  assert.equal(card._forecastTitle('daily'), 'پیش‌بینی ۷ روزه');
+  card.setConfig({ entity: 'weather.home', language: 'en' });
+  assert.equal(card._digits('12:34'), '12:34');
+  assert.equal(card._t(16, 'C'), 16);
+  assert.equal(card._condLabel('rainy'), 'Rainy');
+});
+
+test('crown uses one animation per particle and three differently weighted geometries', () => {
+  const start = source.indexOf('.splash-l, .splash-r {');
+  const end = source.indexOf('\n.cloud {', start);
+  const css = source.slice(start, end);
+  assert.match(css, /animation:splashLeft 0\.6s ease-out forwards/);
+  assert.match(css, /animation:splashRight 0\.6s ease-out forwards/);
+  assert.match(css, /animation:splashCenter 0\.6s ease-out forwards/);
+  assert.doesNotMatch(css, /animation:splashIn|splashOut/);
+  const startMethod = source.indexOf('  _initDetSplash(condition) {');
+  const stopMethod = source.indexOf('  _clearDetSplash()', startMethod);
+  const method = source.slice(startMethod, stopMethod);
+  assert.match(method, /choice < 0\.5/);
+  assert.match(method, /choice < 0\.85/);
+  for (const value of ['size:0.75', 'size:1.05', 'size:1.35', '--splash-up', '--splash-right']) assert.ok(method.includes(value));
 });

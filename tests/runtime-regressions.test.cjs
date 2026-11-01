@@ -487,3 +487,39 @@ test('legacy sensor rows keep YAML overflow while the forecast carousel remains 
   assert.equal((legacyHtml.match(/class="sr"/g) || []).length, 7);
   assert.match(legacyHtml, /Extra 7/);
 });
+
+test('forecast modal keeps existing rows when the forecast is unchanged', () => {
+  const card = new Card();
+  card._config = { entity: 'weather.home', language: 'en', temperature_unit: 'C' };
+  card._hass = { states: { 'weather.home': { state: 'rainy', attributes: { temperature_unit: 'C' } } } };
+  let html = ''; let writes = 0;
+  const rows = { get innerHTML() { return html; }, set innerHTML(value) { html = value; writes++; } };
+  const title = { textContent: '' };
+  card.shadowRoot = { getElementById: () => rows, querySelector: () => title };
+  card.getCachedIcon = () => '<svg></svg>';
+  card._moonSnapshot = () => ({ phase: 'full_moon', fraction: 0.5 });
+  card._forecastIconArgs = () => ({ condition: 'rainy', isNight: false });
+  card._day = () => '13:00';
+  const forecast = [{ datetime: '2026-11-01T13:00:00Z', temperature: 19, condition: 'rainy' }];
+  const ctx = { enabled: false, weatherEntity: 'weather.home' };
+  card._updateForecastModal(forecast, 'full_moon', .5, 'hourly', true, ctx);
+  assert.equal(writes, 1);
+  card._updateForecastModal(forecast, 'full_moon', .5, 'hourly', true, ctx);
+  assert.equal(writes, 1, 'unchanged forecast must not replace icons or scroll content');
+  card._updateForecastModal([{ ...forecast[0], temperature: 18 }], 'full_moon', .5, 'hourly', true, ctx);
+  assert.equal(writes, 2);
+  assert.match(html, /18°/);
+  card._updateForecastModal([], 'full_moon', .5, 'hourly', true, ctx);
+  assert.equal(writes, 3);
+  assert.match(html, /No hourly forecast available/);
+  card._updateForecastModal([], 'full_moon', .5, 'hourly', true, ctx);
+  assert.equal(writes, 3);
+});
+
+test('modal icons omit SVG filters without changing forecast strip filters', () => {
+  const override = source.indexOf('.fc-modal-icon > svg { filter:none; }');
+  const forecastFilter = source.indexOf('.fic > svg,.fc-modal-icon > svg {');
+  assert.ok(forecastFilter !== -1 && override > forecastFilter);
+  const rule = source.slice(forecastFilter, override);
+  assert.match(rule, /drop-shadow/);
+});
