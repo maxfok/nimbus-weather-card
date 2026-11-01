@@ -1,4 +1,4 @@
-// Nimbus Weather Card v2.6.1
+// Nimbus Weather Card v2.6.2
 // https://github.com/maxfok/nimbus-weather-card
 // (c) 2024 Gerasimos Fokaefs — MIT License
 
@@ -1524,7 +1524,26 @@ const NIMBUS_DATE_LOCALES = Object.freeze({
   es: 'es-ES',
   de: 'de-DE',
   nl: 'nl-NL',
+  fa: 'fa-IR-u-ca-gregory',
 });
+
+const NIMBUS_PERSIAN = Object.freeze({
+  'Hourly Forecast':'پیش‌بینی ساعتی', '7-Day Forecast':'پیش‌بینی ۷ روزه',
+  'Hourly':'ساعتی', '7-day':'۷ روزه', 'Weather sources':'منابع هواشناسی',
+  'Supplemental Sensors':'حسگرهای تکمیلی', 'No available data':'داده‌ای در دسترس نیست',
+  'Use left or right arrow keys to change sensors.':'برای تغییر حسگرها از کلیدهای جهت چپ یا راست استفاده کنید.',
+  'Show forecast':'نمایش پیش‌بینی', 'Show supplemental sensors':'نمایش حسگرهای تکمیلی',
+  'No temperature data available':'دادهٔ دما در دسترس نیست',
+  'Sunrise':'طلوع خورشید', 'Sunset':'غروب خورشید', 'Feels like':'دمای محسوس',
+  'Weather card, click for more details':'کارت هواشناسی؛ برای جزئیات بیشتر کلیک کنید',
+  'Precipitation amount':'مقدار بارش', 'Precipitation probability':'احتمال بارش',
+  'Local Station':'ایستگاه محلی', 'Weather details':'جزئیات هوا', 'Forecast':'پیش‌بینی',
+  'Supplemental sensors':'حسگرهای تکمیلی', 'Close forecast':'بستن پیش‌بینی',
+  'Weather entity not found':'موجودیت هواشناسی پیدا نشد',
+  'Select an existing weather entity in the card configuration.':'یک موجودیت هواشناسی موجود را در تنظیمات کارت انتخاب کنید.',
+  'No entity configured':'هیچ موجودیتی تنظیم نشده است',
+});
+const NIMBUS_PERSIAN_CONDITIONS = Object.freeze({sunny:'آفتابی','clear-night':'شب صاف',partlycloudy:'نیمه‌ابری',cloudy:'ابری',fog:'مه‌آلود',rainy:'بارانی',pouring:'باران شدید',lightning:'رعدوبرق','lightning-rainy':'رعدوبرق و باران',snowy:'برفی','snowy-rainy':'باران و برف',hail:'تگرگ',windy:'بادخیز','windy-variant':'بادخیز',exceptional:'شرایط غیرعادی',overcast:'کاملاً ابری'});
 
 // IANA tzdb 2026c zone.tab, reduced to territory, canonical zone, a practical
 // disambiguation hint, and its primary coordinates. Keeping a pinned local
@@ -2751,6 +2770,7 @@ class NimbusWeatherCard extends HTMLElement {
   }
 
   _resolvedDirection() {
+    if (this._config?.direction === 'auto' && this._config?.language === 'fa') return 'rtl';
     return _resolvedTextDirection(this._config?.direction, this._hass, this);
   }
 
@@ -3206,7 +3226,7 @@ class NimbusWeatherCard extends HTMLElement {
       source.label ||
       weatherState?.attributes?.friendly_name ||
       source.entity ||
-      'Local Station'
+      this._tr('Local Station')
     );
   }
 
@@ -3281,7 +3301,7 @@ class NimbusWeatherCard extends HTMLElement {
 
   _renderSourceTabs(ctx) {
     if (!ctx?.enabled || ctx.sources.length < 2) return '';
-    return `<div class="source-tabs" role="tablist" aria-label="Weather sources">
+    return `<div class="source-tabs" role="tablist" aria-label="${this._tr('Weather sources')}">
       ${ctx.sources
         .map((source) => {
           const active = source.id === ctx.activeSourceId;
@@ -5004,6 +5024,9 @@ class NimbusWeatherCard extends HTMLElement {
     return speed / 3.6;
   }
 
+  _tr(text) { return this._config?.language === 'fa' ? (NIMBUS_PERSIAN[text] || text) : text; }
+  _digits(value) { return this._config?.language === 'fa' ? String(value).replace(/[0-9]/g, digit => '۰۱۲۳۴۵۶۷۸۹'[Number(digit)]) : value; }
+
   _condLabel(condition) {
     condition = normalizeCondition(condition) || condition;
     const lang = this._config?.language || 'en';
@@ -5086,10 +5109,10 @@ class NimbusWeatherCard extends HTMLElement {
     // A source may retain clear-night from HA home while its own location is
     // already in daylight. Solar geometry is the presentation authority.
     const displayCondition = condition === 'clear-night' && !isNight ? 'sunny' : condition;
-    const label = C[i]?.[displayCondition] || COND_LABELS[displayCondition] || displayCondition;
+    const label = (lang === 'fa' && NIMBUS_PERSIAN_CONDITIONS[displayCondition]) || C[i]?.[displayCondition] || COND_LABELS[displayCondition] || displayCondition;
     // If sunny but it is actually night, show the stable localized night label.
     if (displayCondition === 'sunny' && isNight) {
-      return C[i]?.['clear-night'] || 'Clear Night';
+      return (lang === 'fa' && NIMBUS_PERSIAN_CONDITIONS['clear-night']) || C[i]?.['clear-night'] || 'Clear Night';
     }
     return label;
   }
@@ -7552,11 +7575,11 @@ class NimbusWeatherCard extends HTMLElement {
   }
 
   _forecastTitle(type) {
-    return type === 'hourly' ? 'Hourly Forecast' : '7-Day Forecast';
+    return this._tr(type === 'hourly' ? 'Hourly Forecast' : '7-Day Forecast');
   }
 
   _forecastButtonLabel(type) {
-    return type === 'hourly' ? 'Hourly' : '7-day';
+    return this._tr(type === 'hourly' ? 'Hourly' : '7-day');
   }
 
   _modalForecastLimit(type) {
@@ -8433,15 +8456,12 @@ class NimbusWeatherCard extends HTMLElement {
   background:rgba(200,230,255,0.85); border-radius:50% 50% 40% 40%;
   transform-origin:bottom center; pointer-events:none;
 }
-.splash-l, .splash-r, .splash-c { animation:splashIn 0.15s ease-out, splashOut 0.4s ease-in 0.2s forwards; }
-.splash-l { animation:splashIn 0.15s ease-out, splashLeft 0.45s ease-out, splashOut 0.4s ease-in 0.2s forwards; }
-.splash-r { animation:splashIn 0.15s ease-out, splashRight 0.45s ease-out, splashOut 0.4s ease-in 0.2s forwards; }
-.splash-c { position:absolute; width:3px; height:3px; background:rgba(200,230,255,0.85); border-radius:50%; pointer-events:none; animation:splashIn 0.15s ease-out, splashCenter 0.35s ease-out, splashOut 0.4s ease-in 0.15s forwards; }
-@keyframes splashIn { 0%{opacity:0;transform:scale(0.5)} 100%{opacity:1;transform:scale(1)} }
-@keyframes splashOut { 0%{opacity:1;transform:scale(1)} 100%{opacity:0;transform:scale(0.8);visibility:hidden} }
-@keyframes splashLeft  { 0%{transform:translate(0,0) rotate(-35deg) scaleY(1.2);opacity:.9} 60%{transform:translate(-8px,-10px) rotate(-45deg) scaleY(.7);opacity:.6} 100%{transform:translate(-10px,2px) rotate(-20deg) scaleY(.2);opacity:0} }
-@keyframes splashRight { 0%{transform:translate(0,0) rotate(35deg) scaleY(1.2);opacity:.9} 60%{transform:translate(8px,-10px) rotate(45deg) scaleY(.7);opacity:.6} 100%{transform:translate(10px,2px) rotate(20deg) scaleY(.2);opacity:0} }
-@keyframes splashCenter { 0%{transform:translate(-50%,0) scaleX(2);opacity:.9} 50%{transform:translate(-50%,-7px) scaleX(1);opacity:.6} 100%{transform:translate(-50%,0) scaleX(1);opacity:0} }
+.splash-l { animation:splashLeft 0.6s ease-out forwards; }
+.splash-r { animation:splashRight 0.6s ease-out forwards; }
+.splash-c { position:absolute; width:3px; height:3px; background:rgba(200,230,255,0.85); border-radius:50%; pointer-events:none; animation:splashCenter 0.6s ease-out forwards; }
+@keyframes splashLeft  { 0%{transform:translate(0,0) rotate(-35deg) scale(var(--splash-scale,1));opacity:0} 25%{opacity:.9} 60%{transform:translate(var(--splash-left),var(--splash-up)) rotate(-45deg) scale(var(--splash-scale,1));opacity:.6} 100%{transform:translate(var(--splash-left-end),2px) rotate(-20deg) scale(var(--splash-scale,1)) scaleY(.2);opacity:0} }
+@keyframes splashRight { 0%{transform:translate(0,0) rotate(35deg) scale(var(--splash-scale,1));opacity:0} 25%{opacity:.9} 60%{transform:translate(var(--splash-right),var(--splash-up)) rotate(45deg) scale(var(--splash-scale,1));opacity:.6} 100%{transform:translate(var(--splash-right-end),2px) rotate(20deg) scale(var(--splash-scale,1)) scaleY(.2);opacity:0} }
+@keyframes splashCenter { 0%{transform:translate(-50%,0) scale(var(--splash-scale,1)) scaleX(2);opacity:0} 25%{opacity:.9} 50%{transform:translate(-50%,var(--splash-center-up)) scale(var(--splash-scale,1));opacity:.6} 100%{transform:translate(-50%,0) scale(var(--splash-scale,1));opacity:0} }
 .cloud { position:absolute; pointer-events:none; will-change:transform; animation:cloudMove linear infinite; filter:blur(3px) }
 .cloud1 { top:6%;  width:180px; left:-190px; animation-duration:80s; animation-delay:0s;   opacity:0.9 }
 .cloud2 { top:35%; width:140px; left:-150px; animation-duration:65s; animation-delay:-18s; opacity:0.75 }
@@ -8513,6 +8533,11 @@ class NimbusWeatherCard extends HTMLElement {
   --hero-condition-stroke:rgba(224,235,255,.62); --hero-condition-highlight:rgba(255,255,255,.20); --hero-condition-shadow:rgba(0,3,22,.32);
 }
 .hd   { display:flex; justify-content:space-between; align-items:center; margin-bottom:4px }
+/* Keep the hero clear of the sky artwork in RTL while isolating its text. */
+:host([dir="rtl"]) .hd { direction:ltr; }
+:host([dir="rtl"]) .tmp, :host([dir="rtl"]) .cn2 { direction:ltr; margin-left:0; margin-right:auto; }
+:host([dir="rtl"]) .hl { text-align:left; }
+
 .loc  { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; opacity:.85 }
 .cnd  { font-size:11px; opacity:.7; text-transform:capitalize }
 .bidi-auto { unicode-bidi:isolate; }
@@ -8775,12 +8800,16 @@ class NimbusWeatherCard extends HTMLElement {
 }
 .fd { font-size:14px; }
 .fic { width:32px; height:32px; filter:none; }
+/* Keep the modal SVG shadow on one layer, as in the forecast strip. */
+.fc-modal-icon { filter:none; }
 .fic > svg { width:32px; height:32px; display:block; }
 .fic > svg,.fc-modal-icon > svg {
   filter:drop-shadow(.75px -.75px 0 var(--forecast-icon-edge))
     drop-shadow(-1.15px 1.2px 0 var(--forecast-icon-depth))
     drop-shadow(-2.6px 2.8px 1.5px var(--forecast-icon-cast-shadow));
 }
+/* Avoid Safari repaint delays for SVG filters inside the scrolling modal. */
+.fc-modal-icon > svg { filter:none; }
 .fh { font-size:15px; }
 .fl { font-size:13px; }
 .fi + .fi::before { background:linear-gradient(to bottom,transparent,rgba(235,248,255,.10) 24%,rgba(235,248,255,.10) 76%,transparent); }
@@ -8962,7 +8991,7 @@ class NimbusWeatherCard extends HTMLElement {
 
 <div class="wrapper">
   <div class="source-tabs-slot" id="source-tabs-slot" hidden></div>
-  <div class="card" id="card" role="button" tabindex="0" aria-label="Weather card, click for more details">
+  <div class="card" id="card" role="button" tabindex="0" aria-label="${this._tr('Weather card, click for more details')}">
     <div class="bg" id="bg"></div>
     <div class="bg" id="bg-fade"></div>
     <div id="solar-presence" class="solar-presence" data-solar-hydrating aria-hidden="true">
@@ -8998,7 +9027,7 @@ class NimbusWeatherCard extends HTMLElement {
       <div class="fc-modal-handle"></div>
       <div class="fc-modal-header" style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px 8px;">
         <div class="fc-modal-title" dir="auto" style="padding:0;">7-Day Forecast</div>
-        <button type="button" class="fc-modal-close" aria-label="Close forecast" style="cursor:pointer;font-size:18px;color:rgba(255,255,255,0.35);line-height:1;padding:4px 6px;border-radius:8px;background:rgba(255,255,255,0.06);border:0;">✕</button>
+        <button type="button" class="fc-modal-close" aria-label="${this._tr('Close forecast')}" style="cursor:pointer;font-size:18px;color:rgba(255,255,255,0.35);line-height:1;padding:4px 6px;border-radius:8px;background:rgba(255,255,255,0.06);border:0;">✕</button>
       </div>
       <div id="fc-modal-rows"></div>
     </div>
@@ -9118,7 +9147,7 @@ class NimbusWeatherCard extends HTMLElement {
     if (!entityIsF && displayF) v = (v * 9) / 5 + 32;
     else if (entityIsF && !displayF) v = ((v - 32) * 5) / 9;
 
-    return Math.round(v);
+    return this._digits(Math.round(v));
   }
 
   _isUsableValue(value) {
@@ -9543,7 +9572,7 @@ class NimbusWeatherCard extends HTMLElement {
   // Για μη-θερμοκρασίες (υγρασία, πίεση, κλπ) — μόνο στρογγυλοποίηση
   _fmt(v) {
     v = this._num(v);
-    return v === null ? '--' : Math.round(v);
+    return v === null ? '--' : this._digits(Math.round(v));
   }
 
   _forecastPrecipitationAmount(item) {
@@ -9565,7 +9594,7 @@ class NimbusWeatherCard extends HTMLElement {
     const unit = rawUnit === 'in' ? 'in' : rawUnit === 'mm' ? 'mm' : null;
     if (!unit) return '<div class="fp" aria-hidden="true"></div>';
     const label = `${Number(amount.toFixed(2))} ${unit}`;
-    return `<div class="fp bidi-ltr" dir="ltr" role="img" aria-label="Precipitation amount ${label}"><span class="fp-icon" aria-hidden="true">${MDI.precipitation}</span><span class="fp-value" aria-hidden="true">${label}</span></div>`;
+    return `<div class="fp bidi-ltr" dir="ltr" role="img" aria-label="${this._tr('Precipitation amount')} ${label}"><span class="fp-icon" aria-hidden="true">${MDI.precipitation}</span><span class="fp-value" aria-hidden="true">${label}</span></div>`;
   }
 
   _forecastPrecipitationProbability(item) {
@@ -9595,9 +9624,9 @@ class NimbusWeatherCard extends HTMLElement {
       const hour = timeZone ? this._timeZoneParts(d, timeZone, true)?.hour : d.getHours();
       if (!Number.isFinite(hour)) return '--';
       if (use24h) {
-        return hour.toString().padStart(2, '0') + ':00';
+        return this._digits(hour.toString().padStart(2, '0') + ':00');
       } else {
-        return (hour % 12 || 12) + (hour < 12 ? 'am' : 'pm');
+        return this._digits((hour % 12 || 12) + (hour < 12 ? 'am' : 'pm'));
       }
     }
     const loc = NIMBUS_DATE_LOCALES[this._config?.language || 'en'] || 'en-US';
@@ -9616,11 +9645,11 @@ class NimbusWeatherCard extends HTMLElement {
     const minute = parts?.minute ?? d.getMinutes();
     if (use24h) {
       return (
-        hour.toString().padStart(2, '0') + ':' + minute.toString().padStart(2, '0')
+        this._digits(hour.toString().padStart(2, '0') + ':' + minute.toString().padStart(2, '0'))
       );
     }
     return (
-      (hour % 12 || 12) + ':' + minute.toString().padStart(2, '0') + (hour < 12 ? 'am' : 'pm')
+      this._digits((hour % 12 || 12) + ':' + minute.toString().padStart(2, '0') + (hour < 12 ? 'am' : 'pm'))
     );
   }
 
@@ -9839,9 +9868,9 @@ class NimbusWeatherCard extends HTMLElement {
     if (!ct) return;
     ct.innerHTML = `
       <div class="entity-error">
-        <div class="entity-error-title">Weather entity not found</div>
-        <div class="entity-error-subtitle">Select an existing weather entity in the card configuration.</div>
-        <div class="entity-error-code">${this._escapeHtml(entityId || 'No entity configured')}</div>
+        <div class="entity-error-title">${this._tr('Weather entity not found')}</div>
+        <div class="entity-error-subtitle">${this._tr('Select an existing weather entity in the card configuration.')}</div>
+        <div class="entity-error-code">${this._escapeHtml(entityId || this._tr('No entity configured'))}</div>
       </div>
     `;
     this._schedulePanelFillSync();
@@ -10358,7 +10387,7 @@ class NimbusWeatherCard extends HTMLElement {
       pressure != null ? cell(MDI.pressure, `${this._fmt(pressure)} hPa`) : '',
       uv != null ? cell(MDI.uv, `UV ${this._fmt(uv)}`) : '',
       feelsLike.value !== null
-        ? cell(MDI.thermometer, `Feels like ${this._t(feelsLike.value, feelsLike.unit)}°`)
+        ? cell(MDI.thermometer, `${this._tr('Feels like')} ${this._t(feelsLike.value, feelsLike.unit)}°`)
         : '',
     ].filter(Boolean);
 
@@ -10416,7 +10445,7 @@ class NimbusWeatherCard extends HTMLElement {
     if (!showRow) return '';
     const probability = this._forecastPrecipitationProbability(item);
     if (probability === null) return '<div class="fp" aria-hidden="true"></div>';
-    return `<div class="fp bidi-ltr" dir="ltr" role="img" aria-label="Precipitation probability ${probability}%"><span class="fp-icon" aria-hidden="true">${MDI.humidity}</span><span class="fp-value" aria-hidden="true">${probability}%</span></div>`;
+    return `<div class="fp bidi-ltr" dir="ltr" role="img" aria-label="${this._tr('Precipitation probability')} ${probability}%"><span class="fp-icon" aria-hidden="true">${MDI.humidity}</span><span class="fp-value" aria-hidden="true">${probability}%</span></div>`;
   }
 
   _renderForecastTile(
@@ -10434,7 +10463,7 @@ class NimbusWeatherCard extends HTMLElement {
         sourceCtx,
       );
       return `
-            <div class="fi fi-sun" data-suntime="${sunTime}" aria-label="${f.condition === 'sunrise' ? 'Sunrise' : 'Sunset'} ${sunTime}" tabindex="0">
+            <div class="fi fi-sun" data-suntime="${sunTime}" aria-label="${this._tr(f.condition === 'sunrise' ? 'Sunrise' : 'Sunset')} ${sunTime}" tabindex="0">
               <div class="fd bidi-auto" dir="auto">${day}</div>
               <div class="fic">${this.getCachedIcon(f.condition, false, forecastMoon.phase, forecastMoon.fraction)}</div>
               <div class="fh bidi-ltr" dir="ltr">${f._slotTemp != null ? this._t(f._slotTemp, f._temperatureUnit) + '°' : ''}</div>
@@ -10597,7 +10626,7 @@ class NimbusWeatherCard extends HTMLElement {
       hud = container.querySelector('.supplement-hud');
       this._attachSupplementHandlers(hud);
     }
-    const label = 'Supplemental Sensors';
+    const label = this._tr('Supplemental Sensors');
     hud.setAttribute('aria-label', label);
     hud.querySelector('.supplement-label').textContent = label;
     const clock = hud.querySelector('#supplement-clock');
@@ -10628,7 +10657,7 @@ class NimbusWeatherCard extends HTMLElement {
     });
     const empty = windowNode.querySelector('.supplement-empty');
     empty.hidden = candidates.length > 0;
-    empty.textContent = 'No available data';
+    empty.textContent = this._tr('No available data');
     this._labelSupplementPage();
     if (isNew || sourceChanged || candidatesChanged) this._settleSupplementPage();
     this._syncSupplementDiscovery();
@@ -10647,10 +10676,10 @@ class NimbusWeatherCard extends HTMLElement {
     cells.forEach((cell, index) => cell.setAttribute('aria-hidden', String(index < start || index >= start + 3)));
     const names = cells.slice(start, start + 3).map((cell) => cell.querySelector('.supplement-name').textContent).join(', ');
     const canChangePage = this._supplementPageStarts().length > 1;
-    const changeHint = 'Use left or right arrow keys to change sensors.';
+    const changeHint = this._tr('Use left or right arrow keys to change sensors.');
     windowNode.setAttribute('aria-label', names
       ? `${names}${canChangePage ? `. ${changeHint}` : ''}`
-      : 'No available data');
+      : this._tr('No available data'));
   }
 
   _clearSupplementTimer() {
@@ -10869,11 +10898,11 @@ class NimbusWeatherCard extends HTMLElement {
     if (isNew) {
       ct.innerHTML = `<div id="carousel-hero" class="carousel-hero"></div>
         <div id="carousel-lower" class="carousel-lower">
-          <div id="carousel-viewport" class="carousel-viewport carousel-instant" data-page="0" role="region" aria-label="Weather details">
-            <div id="carousel-page-forecast" class="carousel-page carousel-page-forecast" role="group" aria-label="Forecast">
+          <div id="carousel-viewport" class="carousel-viewport carousel-instant" data-page="0" role="region" aria-label="${this._tr('Weather details')}">
+            <div id="carousel-page-forecast" class="carousel-page carousel-page-forecast" role="group" aria-label="${this._tr('Forecast')}">
               <div id="carousel-details"></div><div id="carousel-forecast"></div><div id="carousel-legacy-sensors"></div>
             </div>
-            <div id="carousel-page-sensors" class="carousel-page carousel-page-sensors" role="group" aria-label="Supplemental sensors"><div id="carousel-sensors"></div></div>
+            <div id="carousel-page-sensors" class="carousel-page carousel-page-sensors" role="group" aria-label="${this._tr('Supplemental sensors')}"><div id="carousel-sensors"></div></div>
           </div>
           <div id="carousel-footer" class="carousel-footer">
             <button type="button" id="carousel-toggle" class="carousel-toggle" aria-controls="carousel-viewport" aria-label="Show supplemental sensors" aria-pressed="false"><span class="carousel-dot" aria-hidden="true"></span><span class="carousel-dot" aria-hidden="true"></span></button>
@@ -10920,7 +10949,7 @@ class NimbusWeatherCard extends HTMLElement {
     const toggle = this.shadowRoot.getElementById('carousel-toggle');
     viewport.dataset.page = String(next);
     toggle.setAttribute('aria-pressed', String(next === 1));
-    toggle.setAttribute('aria-label', next ? 'Show forecast' : 'Show supplemental sensors');
+    toggle.setAttribute('aria-label', this._tr(next ? 'Show forecast' : 'Show supplemental sensors'));
     toggle.dataset.page = String(next);
     ['carousel-page-forecast', 'carousel-page-sensors'].forEach((id, index) => {
       const section = this.shadowRoot.getElementById(id);
@@ -11128,8 +11157,13 @@ class NimbusWeatherCard extends HTMLElement {
     const title = this.shadowRoot?.querySelector('.fc-modal-title');
     if (title) title.textContent = this._forecastTitle(forecastType);
     if (!rows) return;
+    const setRows = (markup) => {
+      if (rows._nimbusForecastMarkup === markup) return;
+      rows.innerHTML = markup;
+      rows._nimbusForecastMarkup = markup;
+    };
     if (!forecast.length) {
-      rows.innerHTML = `<div class="fc-modal-empty">No ${forecastType} forecast available</div>`;
+      setRows( `<div class="fc-modal-empty">${this._config?.language === 'fa' ? `پیش‌بینی ${this._tr(forecastType === 'hourly' ? 'Hourly' : '7-day')} در دسترس نیست` : `No ${forecastType} forecast available`}</div>`);
       return;
     }
     const allItems = this._withForecastTemperatureUnit(
@@ -11148,13 +11182,13 @@ class NimbusWeatherCard extends HTMLElement {
       return [lo, hi].filter((value) => value !== null);
     });
     if (!tempValues.length) {
-      rows.innerHTML = `<div class="fc-modal-empty">No temperature data available</div>`;
+      setRows(`<div class="fc-modal-empty">${this._tr('No temperature data available')}</div>`);
       return;
     }
     const absMin = Math.min(...tempValues);
     const absMax = Math.max(...tempValues);
     const range = absMax - absMin || 1;
-    rows.innerHTML = allItems
+    const markup = allItems
       .map((f) => {
         const hi = toNumber(f.temperature);
         const lo =
@@ -11193,6 +11227,7 @@ class NimbusWeatherCard extends HTMLElement {
       </div>`;
       })
       .join('');
+    setRows(markup);
   }
 
   _validClockTimeZone(value) {
@@ -11260,8 +11295,8 @@ class NimbusWeatherCard extends HTMLElement {
         month: 'short',
       }),
       time: use24h
-        ? `${String(h).padStart(2, '0')}:${m}`
-        : `${h % 12 || 12}:${m}${h < 12 ? 'am' : 'pm'}`,
+        ? this._digits(`${String(h).padStart(2, '0')}:${m}`)
+        : this._digits(`${h % 12 || 12}:${m}${h < 12 ? 'am' : 'pm'}`),
     };
   }
 
@@ -11312,7 +11347,9 @@ class NimbusWeatherCard extends HTMLElement {
       const w = layer.offsetWidth;
       if (!w) return;
       const x = 12 + Math.random() * (w - 24);
-      const sizeVar = (0.8 + Math.random() * 0.7).toFixed(2);
+      const choice = Math.random();
+      const variant = choice < 0.5 ? {size:0.75, spread:5, height:6} : choice < 0.85 ? {size:1.05, spread:8, height:10} : {size:1.35, spread:12, height:14};
+      const sizeVar = variant.size;
 
       const l = document.createElement('div');
       l.className = 'splash-l';
@@ -11321,9 +11358,17 @@ class NimbusWeatherCard extends HTMLElement {
       const c = document.createElement('div');
       c.className = 'splash-c';
       l.style.cssText = r.style.cssText = c.style.cssText = `left:${x}px;bottom:0`;
-      l.style.transform = `scale(${sizeVar})`;
-      r.style.transform = `scale(${sizeVar})`;
-      c.style.transform = `scale(${(sizeVar * 0.7).toFixed(2)})`;
+      for (const el of [l, r, c]) {
+        el.style.setProperty('--splash-left', `${-variant.spread}px`);
+        el.style.setProperty('--splash-right', `${variant.spread}px`);
+        el.style.setProperty('--splash-left-end', `${-variant.spread * 1.2}px`);
+        el.style.setProperty('--splash-right-end', `${variant.spread * 1.2}px`);
+        el.style.setProperty('--splash-up', `${-variant.height}px`);
+        el.style.setProperty('--splash-center-up', `${-variant.height * .7}px`);
+      }
+      l.style.setProperty('--splash-scale', sizeVar);
+      r.style.setProperty('--splash-scale', sizeVar);
+      c.style.setProperty('--splash-scale', (sizeVar * 0.7).toFixed(2));
       layer.appendChild(l);
       layer.appendChild(r);
       layer.appendChild(c);
@@ -12554,6 +12599,7 @@ ${
       <option value="es" ${this._val('language', 'en') === 'es' ? 'selected' : ''}>Espanol</option>
       <option value="de" ${this._val('language', 'en') === 'de' ? 'selected' : ''}>Deutsch</option>
       <option value="nl" ${this._val('language', 'en') === 'nl' ? 'selected' : ''}>Nederlands</option>
+      <option value="fa" ${this._val('language', 'en') === 'fa' ? 'selected' : ''}>فارسی</option>
     </select>
   </div>
   <div class="row">
@@ -12616,6 +12662,7 @@ ${
       <option value="es" ${this._val('language', 'en') === 'es' ? 'selected' : ''}>Espanol</option>
       <option value="de" ${this._val('language', 'en') === 'de' ? 'selected' : ''}>Deutsch</option>
       <option value="nl" ${this._val('language', 'en') === 'nl' ? 'selected' : ''}>Nederlands</option>
+      <option value="fa" ${this._val('language', 'en') === 'fa' ? 'selected' : ''}>فارسی</option>
     </select>
   </div>
   <div class="row">

@@ -4,6 +4,17 @@ Notable changes to Nimbus Weather Card are recorded here. Nimbus follows semanti
 
 ## [Unreleased]
 
+## [v2.6.2] — 2026-11-01
+
+### Added
+
+- Persian language option with localized weather conditions, forecast labels and dates, Persian digits, and automatic RTL direction. The main weather content remains clear of the sun and moon.
+
+### Fixed
+
+- Rain crown splashes now complete their motion, with three sizes for a more natural appearance.
+- Forecast modal icons avoid Safari SVG filter repaint delays; unchanged forecast rows are preserved during refreshes.
+
 ## [v2.6.1] — 2026-10-21
 
 ### Added
@@ -179,7 +190,8 @@ Notable changes to Nimbus Weather Card are recorded here. Nimbus follows semanti
 - Dynamic solar gradient based on sun elevation.
 - Textured moon rendering with hemisphere-aware orientation.
 
-[Unreleased]: https://github.com/maxfok/nimbus-weather-card/compare/v2.6.1...HEAD
+[Unreleased]: https://github.com/maxfok/nimbus-weather-card/compare/v2.6.2...HEAD
+[v2.6.2]: https://github.com/maxfok/nimbus-weather-card/compare/v2.6.1...v2.6.2
 [v2.6.1]: https://github.com/maxfok/nimbus-weather-card/compare/v2.6.0...v2.6.1
 [v2.6.0]: https://github.com/maxfok/nimbus-weather-card/compare/v2.5.1...v2.6.0
 [v2.5.1]: https://github.com/maxfok/nimbus-weather-card/releases/tag/v2.5.1

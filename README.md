@@ -47,6 +47,12 @@ That same idea shaped the rest of this release: keep the weather scene intact, m
 
 Thank you to everyone who tested Nimbus, reported the awkward bits, suggested improvements, and helped shape where the card went next.
 
+## What's new in v2.6.2
+
+- Added a Persian language option, including localized weather labels, dates, digits, and RTL presentation.
+- Corrected rain crown splashes and added three natural variations.
+- Improved forecast modal icon rendering in Safari.
+
 ## What's new in v2.6.1
 
 - Optional **Precipitation Amount** in the daily/hourly forecast strip, independent of probability.
